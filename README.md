@@ -196,7 +196,7 @@ cat ~/.dsh/logs/diagnostics/<最新时间戳>/state.txt
 
 | 症状 | 故障域 | 处理 |
 |---|---|---|
-| 3080 超时但 3457/3458 正常，日志有「web UI 连续 N 次不健康但 3457 健康」 | web 假死（事件循环阻塞） | 0.1.1+ watchdog：无活跃会话且超 60s 自动重启；有活跃会话则保护等待 |
+| 3080 超时但 3457/3458 正常，日志有「datapath stall」 | web 假死（事件循环阻塞） | 0.1.1+ watchdog：MCP initialize + `sessions_list` 探测数据链——无活跃会话连续 2 轮 stall 自动重启；有活跃会话保护 300s（`WATCH_ACTIVE_STALL_GRACE_SEC`）后仍 stall 才重启 |
 | keepalive 日志刷「检测到 helm daemon 重启」且 15s 一次 | daemon 反复重启 / PID 探测抖动 | 看 helm-daemon.log 是否 adapter 反复断开；0.1.1+ 已加限速防抖 |
 | 3458 通但 ChatGPT 连不上 | 隧道控制面断（代理失效） | 确认 7897 代理；tunnel-client-manual.log 看 poller 是否 stopped |
 | 3457 超时但 3080 正常 | daemon 卡死 | watchdog 会自动重启 web 连带 daemon |

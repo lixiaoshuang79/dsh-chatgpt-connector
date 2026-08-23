@@ -69,13 +69,13 @@ log() {
 
 # ---- 单实例锁（PID 文件 + 存活校验）----
 acquire_lock() {
+  local old_pid
   if [ -f "$PID_FILE" ]; then
-    local old_pid
     old_pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
     if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
       # 锁持有者还活着：确认它确实是 watchdog（防 PID 复用误判）
       if ps -ww -p "$old_pid" -o command= 2>/dev/null | grep -q "dsh-web-watchdog.sh"; then
-        log "已有实例在运行（pid=$old_pid），退出"
+        log "已有实例在运行 (pid=${old_pid})，退出"
         exit 0
       fi
     fi
@@ -84,8 +84,8 @@ acquire_lock() {
   echo $$ > "$PID_FILE"
 }
 release_lock() {
+  local cur
   if [ -f "$PID_FILE" ]; then
-    local cur
     cur=$(cat "$PID_FILE" 2>/dev/null || echo "")
     [ "$cur" = "$$" ] && rm -f "$PID_FILE"
   fi
@@ -126,25 +126,48 @@ is_dsh() {
 # ---- liveness / stall detection（v3）----
 # helm daemon 的 MCP auth token（daemon 首启自动生成；不存在时返回 -1 未知）
 HELM_AUTH_FILE="${WATCH_HELM_AUTH_FILE:-$HOME/.agent-chatgpt-helm/token}"
+# 活跃会话保护宽限期：activeSessions>0 且 datapath stall 时，超过该秒数仍不恢复则强制重启
+ACTIVE_STALL_GRACE="${WATCH_ACTIVE_STALL_GRACE_SEC:-300}"
+# 无活跃会话时连续 stall 轮数（超过即重启）
+STALL_ROUNDS_TO_RESTART="${WATCH_STALL_ROUNDS_TO_RESTART:-2}"
 
-# 查 supervisor_health 的 activeSessions 数量。
-# 返回：活跃会话数（0+）；查询失败/无 token 返回 -1（表示"未知"，调用方按保守处理）。
-# 宽松超时（3s）——本查询只用于"是否保护不重启"的决策，失败不影响主探针。
-mcp_active_sessions() {
-  local tok sid out
+# MCP datapath probe：initialize 握手 → sessions_list（只读）。
+# sessions_list 走 daemon → adapter → DSH session 完整数据链，比 /healthz（仅 daemon 进程
+# 活性）更接近真实 runtime 活性：web 假死/daemon 卡死/DSH runtime 挂都会让它失败。
+# 返回（stdout 多行）：
+#   first line: "ok <activeSessions>"  数据链活，且给出 running 会话数
+#   first line: "fail"                 数据链失败（initialize 或 sessions_list 失败）
+#   first line: "notoken"              无 token（无法探测，按保守处理）
+# token 通过 chmod 600 临时 header 文件传给 curl（-H @file），不进进程 argv。
+mcp_probe_sessions() {
+  local tok hdr sid out act
   tok=$(cat "$HELM_AUTH_FILE" 2>/dev/null || echo "")
-  [ -z "$tok" ] && { echo -1; return 1; }
-  sid=$(curl -sS --max-time 3 -D - -H "Authorization: Bearer $tok" \
+  [ -z "$tok" ] && { echo "notoken"; return 1; }
+  hdr=$(mktemp)
+  chmod 600 "$hdr"
+  printf 'Authorization: Bearer %s\n' "$tok" > "$hdr"
+  sid=$(curl -sS --max-time 5 -D - -H "@$hdr" \
     -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
     -X POST "http://127.0.0.1:${MCP_PORT}/mcp" \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"dsh-watchdog","version":"3"}}}' 2>/dev/null \
     | grep -i "^mcp-session-id:" | tr -d '\r' | awk '{print $2}')
-  [ -z "$sid" ] && { echo -1; return 1; }
-  out=$(curl -sS --max-time 3 -H "Authorization: Bearer $tok" -H "Content-Type: application/json" \
+  if [ -z "$sid" ]; then
+    rm -f "$hdr"
+    echo "fail"
+    return 1
+  fi
+  out=$(curl -sS --max-time 5 -H "@$hdr" -H "Content-Type: application/json" \
     -H "Accept: application/json, text/event-stream" -H "Mcp-Session-Id: $sid" \
     -X POST "http://127.0.0.1:${MCP_PORT}/mcp" \
-    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"supervisor_health","arguments":{}}}' 2>/dev/null)
-  echo "$out" | grep -o '"activeSessions":[0-9]*' | head -1 | cut -d: -f2
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sessions_list","arguments":{}}}' 2>/dev/null)
+  rm -f "$hdr"
+  act=$(echo "$out" | grep -o '"status":"running"' | wc -l | tr -d ' ')
+  if echo "$out" | grep -q '"sessions"'; then
+    echo "ok ${act:-0}"
+    return 0
+  fi
+  echo "fail"
+  return 1
 }
 
 # 故障诊断快照：自愈动作前把现场状态落盘（~/.dsh/logs/diagnostics/<时间戳>/）
@@ -186,12 +209,11 @@ snapshot_diag() { # $1=原因
 
 # 清理残留 helm daemon（web 被 kill 后可能成孤儿，需显式清理否则新 web attach 卡死 daemon）
 cleanup_orphan_daemon() {
-  local pids pid
+  local pids pid lp lppid webpid waited still
   # 匹配 agent-chatgpt-helm 的 daemon 进程（精确锚定，绝不误伤其他 node 进程）
   pids=$(pgrep -f 'agent-chatgpt-helm/lib/cli\.js daemon' 2>/dev/null || true)
   if [ -z "$pids" ]; then
     # 兜底：3457 端口监听者若不是当前 web 的子进程也清理
-    local lp lppid webpid
     webpid=$(port_pid "$WEB_PORT")
     lp=$(port_pid "$MCP_PORT")
     if [ -n "$lp" ]; then
@@ -209,9 +231,8 @@ cleanup_orphan_daemon() {
       kill "$pid" 2>/dev/null || true
     done
     # 等待退出，超时 SIGKILL
-    local waited=0
+    waited=0
     while [ "$waited" -lt "$DAEMON_DIE_TIMEOUT" ]; do
-      local still
       still=""
       for pid in $pids; do
         kill -0 "$pid" 2>/dev/null && still="$still $pid"
@@ -256,13 +277,13 @@ launch_web() {
 
 # 受控重启：kill web → 清 daemon → 删 sock → 拉起 → 双验证
 restart_web() {
-  local pid
+  local pid waited
   pid=$(port_pid "$WEB_PORT")
   if [ -n "$pid" ]; then
     log "⚠ 双端点持续不健康（${FAIL_THRESHOLD} 次），停止 web pid=$pid"
     kill "$pid" 2>/dev/null || true
     # 等待端口释放（web 优雅退出；优雅退出可能较慢，故给足窗口）
-    local waited=0
+    waited=0
     while [ "$waited" -lt "$WEB_DIE_TIMEOUT" ]; do
       [ -z "$(port_pid "$WEB_PORT")" ] && break
       sleep 1
@@ -290,6 +311,9 @@ log "==== dsh-web-watchdog v2 启动 (pid $$) 间隔=${INTERVAL}s 阈值=${FAIL_
 
 ui_fail=0
 mcp_fail=0
+STALL_SINCE=""
+DATAPATH_FAIL=0
+LAST_ACT=0
 while true; do
   ui_ok=0; mcp_ok=0
   port_pid "$WEB_PORT" >/dev/null && is_dsh && web_healthy && ui_ok=1
@@ -298,6 +322,9 @@ while true; do
   if [ "$ui_ok" = "1" ]; then
     [ "$ui_fail" -gt 0 ] && log "web 健康恢复（此前连续失败 ${ui_fail} 次）"
     ui_fail=0
+    # UI 恢复即清 stall（datapath 也视为恢复，下轮会重新探测）
+    STALL_SINCE=""
+    DATAPATH_FAIL=0
   else
     ui_fail=$((ui_fail + 1))
   fi
@@ -311,28 +338,72 @@ while true; do
   if [ "$ui_fail" -ge "$FAIL_THRESHOLD" ] && [ "$mcp_fail" -ge "$FAIL_THRESHOLD" ]; then
     # 双端点都连续失败 → 真死锁，重启（先快照）
     ui_fail=0; mcp_fail=0
+    STALL_SINCE=""; DATAPATH_FAIL=0
     snapshot_diag "dual-endpoint-down"
     restart_web
   elif [ "$ui_fail" -ge "$FAIL_THRESHOLD" ]; then
-    # 仅 UI 不健康但 MCP 还通：区分「高负载/长任务」与「web 假死」。
-    # 有活跃会话 → 保护不重启（活跃工具调用/长任务进行中，绝不能打断）；
-    # 无活跃会话且翻倍阈值仍不健康 → 真·假死，快照后重启（自愈）。
-    act=$(mcp_active_sessions)
-    if [ -n "$act" ] && [ "$act" != "-1" ] && [ "$act" -gt 0 ]; then
-      log "⚠ web UI 连续 ${ui_fail} 次不健康但 3457 健康，且 ${act} 个活跃会话——保护不重启（高负载或长任务）"
-      ui_fail=0
-    elif [ "$ui_fail" -ge $((FAIL_THRESHOLD * 2)) ]; then
-      log "✗ web UI 连续 ${ui_fail} 次不健康、无活跃会话（MCP 通）——判定 web 假死，快照后重启"
-      ui_fail=0
-      snapshot_diag "ui-stall-no-active-sessions"
-      restart_web
-    else
-      log "⚠ web UI 连续 ${ui_fail} 次不健康、无活跃会话——暂不重启（翻倍阈值 ${FAIL_THRESHOLD}x2 后再判）"
-    fi
+    # 仅 UI 不健康但 MCP healthz 正常：MCP healthz 只是 daemon 进程活性，
+    # 不能代表 session runtime 数据链。用 sessions_list（走 daemon→adapter→DSH）
+    # 探测真实 datapath：成功=活（清 stall）；连续失败=datapath stall。
+    probe=$(mcp_probe_sessions)
+    case "$probe" in
+      ok*)
+        # datapath 活：会话数据链通，只是 web UI 探针慢/超时（高负载或长任务），不重启
+        act=${probe#ok }
+        LAST_ACT=$act
+        if [ "$DATAPATH_FAIL" -gt 0 ] || [ -n "$STALL_SINCE" ]; then
+          log "✓ datapath 恢复（sessions_list 成功，${act} 个 running 会话），清 stall"
+        fi
+        DATAPATH_FAIL=0
+        STALL_SINCE=""
+        ui_fail=0
+        ;;
+      notoken)
+        # 无 token：无法探测数据链，保守处理——沿用既有阈值逻辑（无活跃会话信息时
+        # 按翻倍阈值重启，避免永久不动作）
+        log "⚠ web UI 连续 ${ui_fail} 次不健康且无 token 无法探测 datapath（保守按无活跃处理）"
+        if [ "$ui_fail" -ge $((FAIL_THRESHOLD * 2)) ]; then
+          log "✗ web UI 连续 ${ui_fail} 次不健康、datapath 不可探测——快照后重启"
+          ui_fail=0; STALL_SINCE=""; DATAPATH_FAIL=0
+          snapshot_diag "ui-stall-no-token"
+          restart_web
+        fi
+        ;;
+      fail)
+        # datapath stall 累计
+        DATAPATH_FAIL=$((DATAPATH_FAIL + 1))
+        [ -z "$STALL_SINCE" ] && STALL_SINCE=$(date +%s)
+        now=$(date +%s)
+        act=$LAST_ACT
+        if [ "$act" -gt 0 ]; then
+          # 有活跃会话：保护窗口内不重启，超 grace 仍 stall 则强制重启
+          elapsed=$((now - STALL_SINCE))
+          if [ "$elapsed" -ge "$ACTIVE_STALL_GRACE" ]; then
+            log "✗ datapath stall 已 ${elapsed}s（活跃会话保护期 ${ACTIVE_STALL_GRACE}s 已过），快照后重启"
+            ui_fail=0; STALL_SINCE=""; DATAPATH_FAIL=0; LAST_ACT=0
+            snapshot_diag "datapath-stall-beyond-grace"
+            restart_web
+          else
+            log "⚠ datapath stall ${DATAPATH_FAIL} 轮（${elapsed}s/${ACTIVE_STALL_GRACE}s 保护期内，${act} 个活跃会话），暂不重启"
+          fi
+        else
+          # 无活跃会话：连续 2 轮 stall 即重启
+          if [ "$DATAPATH_FAIL" -ge "$STALL_ROUNDS_TO_RESTART" ]; then
+            log "✗ datapath stall 连续 ${DATAPATH_FAIL} 轮、无活跃会话——判定 web 假死，快照后重启"
+            ui_fail=0; STALL_SINCE=""; DATAPATH_FAIL=0
+            snapshot_diag "datapath-stall-no-active"
+            restart_web
+          else
+            log "⚠ datapath stall ${DATAPATH_FAIL}/${STALL_ROUNDS_TO_RESTART} 轮、无活跃会话——暂不重启"
+          fi
+        fi
+        ;;
+    esac
   elif [ "$mcp_fail" -ge "$FAIL_THRESHOLD" ]; then
     # 仅 MCP 不健康但 UI 通：daemon 可能卡死/未拉起，重启 web（连带 daemon 重启，先快照）
     log "⚠ 3457 MCP 连续 ${mcp_fail} 次不健康但 web UI 健康，重启 web 以恢复 daemon"
     ui_fail=0; mcp_fail=0
+    STALL_SINCE=""; DATAPATH_FAIL=0
     snapshot_diag "mcp-down-ui-up"
     restart_web
   fi

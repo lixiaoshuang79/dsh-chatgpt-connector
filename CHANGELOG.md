@@ -6,15 +6,23 @@
 
 ### Added
 
-- watchdog/keepalive **liveness/stall detection（假死检测）**：web UI 连续不健康但 MCP 健康时，查询 supervisor_health 的 activeSessions —— 有活跃会话则保护不重启（长任务进行中），无活跃会话且翻倍阈值（6 次 ≈ 60s）仍不健康才判定假死并重启
-- **故障诊断快照**：自愈动作（重启 web / 重建隧道）前把进程/端口/日志 tail 落盘到 `~/.dsh/logs/diagnostics/<时间戳>/`（保留最近 10 份），便于事后定位根因
+- watchdog/keepalive **datapath liveness/stall detection（数据链活性检测）**：
+  - 不再把 MCP `/healthz`（仅 daemon 进程活性）当作 runtime 活性——UI 连续失败 ≥3 且 MCP 健康时，通过 MCP initialize + **只读 `sessions_list`**（5s timeout）探测 daemon→adapter→DSH session 完整数据链
+  - `sessions_list` 成功：判定 session datapath 活，清 stall，不重启（高负载/长任务保护）
+  - `sessions_list` 连续失败：进入 datapath stall
+  - activeSessions=0 时连续 2 轮 stall → snapshot → restart（真·web 假死自愈）
+  - activeSessions>0 时 `STALL_SINCE` 保留，`WATCH_ACTIVE_STALL_GRACE_SEC=300` 默认保护；超过 grace 且仍 stall → snapshot → restart（**不会永久保护卡死 session**）
+- **故障诊断快照**：自愈动作（重启 web / 重建隧道）前把进程/端口/日志 tail 落盘到 `~/.dsh/logs/diagnostics/<时间戳>/`（保留最近 10 份）
 - keepalive **重建限速防抖**：60s 内最多重建 3 次，防止 daemon 短暂缺席时每 15s 疯狂重建隧道
 - 快照内容**凭据脱敏**：`sk-` / `tunnel_` / `asdk_app_` 等凭据形态值自动打码
+- `tests/test-stall-detection.sh`：datapath stall 四场景独立测试（UI fail+datapath ok / fail+active0 / fail+active>0 within grace / fail+active>0 beyond grace）
 
 ### Fixed
 
-- keepalive daemon-down 抖动：daemon 探测为空（web 重启窗口内短暂缺席）时不再误判「daemon 重启」触发隧道重建（实测曾每 15s 杀隧道重建 60+ 次）
-- 测试套件端口冲突：固定端口 + 预清理杀任意监听者 → 改为 **python bind(0) 动态分配空闲端口**（不再 kill 未知进程）
+- **bash 3.2 `set -u` + 多字节字符 + `$var` 相邻展开 bug**：`（pid=$old_pid）` 中文括号紧贴变量导致 `old_pid: unbound variable` 误报（实际运行环境手动重跑 watchdog 即触发）→ 中文标点与变量分离（`(pid=${old_pid})`）
+- `local` 声明移出 `if` 复合命令块（bash 3.2 作用域边界问题）
+- keepalive daemon-down 抖动：daemon 探测为空时不再误判「daemon 重启」触发隧道重建
+- 测试套件端口冲突：固定端口 + 预清理杀任意监听者 → **python bind(0) 动态分配空闲端口**（不再 kill 未知进程）
 - 测试隔离：快照/防抖状态文件指向测试临时目录，不写真实 `~/.dsh/logs`
 
 ## [0.1.0] - 2026-08-23

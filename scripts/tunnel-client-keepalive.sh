@@ -32,12 +32,12 @@ mkdir -p "$(dirname "$LOG_FILE")"
 
 # ---- 单实例锁 ----
 acquire_lock() {
+  local old_pid
   if [ -f "$PID_FILE" ]; then
-    local old_pid
     old_pid=$(cat "$PID_FILE" 2>/dev/null || echo "")
     if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
       if ps -ww -p "$old_pid" -o command= 2>/dev/null | grep -q "tunnel-client-keepalive.sh"; then
-        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已有实例在运行（pid=$old_pid），退出" >> "$LOG_FILE"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已有实例在运行 (pid=${old_pid})，退出" >> "$LOG_FILE"
         exit 0
       fi
     fi
@@ -45,8 +45,8 @@ acquire_lock() {
   echo $$ > "$PID_FILE"
 }
 release_lock() {
+  local cur
   if [ -f "$PID_FILE" ]; then
-    local cur
     cur=$(cat "$PID_FILE" 2>/dev/null || echo "")
     [ "$cur" = "$$" ] && rm -f "$PID_FILE"
   fi
