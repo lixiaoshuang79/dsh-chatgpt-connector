@@ -117,7 +117,7 @@ cd ~/deepseek/deepseek-harness && .tools/node22/bin/node --import tsx/esm apps/c
    - 类型选 **Tunnel**，选你建好的 Tunnel，填名（如 `dsh-helm-company`）
    - Auth 选 **No Auth**，勾选风险确认 → **Create**
    - 出现工具列表后点 **Connect** → 弹窗 **Add to ChatGPT** 确认
-2. 打开 ChatGPT，对话里选该连接器，即可看到 DSH 的 19 个工具（7 个 `code_*` 读代码 + 12 个 `sessions_*/supervisor_*` 执行）。
+2. 打开 ChatGPT，对话里选该连接器，即可看到 DSH 的 19 个工具（8 个 `code_*` 读代码含工作区激活 + 11 个 `projects/supervisor/agents/workspaces/sessions_*` 执行）。
 
 > ⚠️ 创建连接器时隧道必须健康（3458 通、tunnel-client 在跑）。隧道不健康时创建会得到「Installed 但 plugin_not_found」的半成品，需 Plugin actions → Uninstall 后重建。
 

@@ -17,7 +17,8 @@
 # 幂等：重复运行安全；已安装项跳过，不重复 bootstrap。
 
 set -u
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+# 仓库根（脚本在 scripts/ 下，../ 即仓库根）
+REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HOME_DIR="$HOME"
 HARNESS_DIR="${DSH_HARNESS_DIR:-$HOME/deepseek/deepseek-harness}"
 NODE_BIN="${HARNESS_NODE_BIN:-$HARNESS_DIR/.tools/node22/bin/node}"
@@ -92,12 +93,14 @@ fi
 echo ""
 echo "--- 3/5 cordis.patch.yml 合并 ---"
 if [ -f "$PATCH_DEST" ]; then
-  if grep -q '^\- id: dsh-chatgpt-helm' "$PATCH_DEST"; then
+  # 幂等检查：匹配任意缩进位置的 - id: dsh-chatgpt-helm（嵌套/insert 格式也能识别）
+  if grep -qE '^\s*- id: dsh-chatgpt-helm' "$PATCH_DEST"; then
     ok "patch 已包含 dsh-chatgpt-helm 段（跳过）"
   else
     echo "" >> "$PATCH_DEST"
     cat "$REPO_DIR/patches/helm-tunnel.patch.yml" >> "$PATCH_DEST"
     ok "已追加 dsh-chatgpt-helm tunnelEnabled:false 补丁到 $PATCH_DEST"
+    say "提示：补丁合并后需重启 DSH web 才生效（watchdog 会自动拉起，或手动 kickstart）"
   fi
 else
   mkdir -p "$(dirname "$PATCH_DEST")"
@@ -108,6 +111,17 @@ fi
 # ---------- 4. 安装 LaunchAgents ----------
 echo ""
 echo "--- 4/5 LaunchAgent 安装 ---"
+
+# web 双 owner 检测：若已存在管理 DSH web 的 LaunchAgent（如 com.deepseek.dsh），
+# watchdog 与其并发拉起 web 会 EADDRINUSE。提示用户停用其一（不自动改动用户配置）。
+WEB_LA=$(ls "$LAUNCH_AGENTS" 2>/dev/null | grep -E '^(com\.deepseek\.dsh|.*dsh.*web.*)\.plist$' || true)
+if [ -n "$WEB_LA" ]; then
+  warn "检测到可能管理 DSH web 的 LaunchAgent：$WEB_LA"
+  say "    dsh-web-watchdog 也会拉起 web（3080）。两者并发会端口冲突，"
+  say "    请停用其中一个（如 mv ~/Library/LaunchAgents/$WEB_LA ~/Library/LaunchAgents/$WEB_LA.disabled + launchctl bootout gui/$(id -u)/${WEB_LA%.plist}），"
+  say "    或确认该 Agent 已停用后继续。"
+fi
+
 if [ "${INSTALL_SKIP_SERVICES:-0}" = "1" ]; then
   say "INSTALL_SKIP_SERVICES=1，跳过 launchd 安装"
 else

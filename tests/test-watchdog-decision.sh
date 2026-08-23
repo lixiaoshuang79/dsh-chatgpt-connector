@@ -9,7 +9,7 @@
 set -u
 cd "$(dirname "$0")"
 
-WATCHDOG="$TMP/dsh-chatgpt-connector/scripts/dsh-web-watchdog.sh"
+WATCHDOG="$(cd .. && pwd)/scripts/dsh-web-watchdog.sh"
 TMP=$(mktemp -d /tmp/watchdog-test.XXXXXX)
 export WATCH_LOG_DIR="$TMP/logs"
 export WATCH_PID_FILE="$TMP/watchdog.pid"

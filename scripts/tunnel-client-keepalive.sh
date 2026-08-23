@@ -53,15 +53,21 @@ release_lock() {
 }
 trap 'release_lock' EXIT
 
-# 从私有凭据文件读取（不打印值）
-CRED_FILE="$HOME/.dsh/.credentials.yaml"
-export CONTROL_PLANE_TUNNEL_ID=$(grep '^CONTROL_PLANE_TUNNEL_ID:' "$CRED_FILE" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
-export CONTROL_PLANE_API_KEY=$(grep '^CONTROL_PLANE_API_KEY:' "$CRED_FILE" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
-export AGENT_CHATGPT_HELM_AUTH=$(cat "$HELM_AUTH_FILE" 2>/dev/null || echo "")
+# 从私有凭据文件读取（不打印值）。
+# CRED_FILE 支持环境变量覆盖（测试注入假凭据；缺省 ~/.dsh/.credentials.yaml）。
+# 注意：凭据在每次 start_tunnel 时重新读取（fresh install 时 keepalive 可能先于
+# daemon 启动，token 由 daemon 首启自动生成——启动时读一次会拿到空 AUTH）。
+CRED_FILE="${CRED_FILE:-$HOME/.dsh/.credentials.yaml}"
 
-# 海外 API 必须走本地代理（Clash Verge 7897）
-export HTTPS_PROXY="http://127.0.0.1:7897"
-export NO_PROXY="127.0.0.1,localhost"
+read_creds() {
+  export CONTROL_PLANE_TUNNEL_ID=$(grep '^CONTROL_PLANE_TUNNEL_ID:' "$CRED_FILE" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
+  export CONTROL_PLANE_API_KEY=$(grep '^CONTROL_PLANE_API_KEY:' "$CRED_FILE" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
+  export AGENT_CHATGPT_HELM_AUTH=$(cat "$HELM_AUTH_FILE" 2>/dev/null || echo "")
+}
+
+# 海外 API 必须走本地代理（Clash Verge 7897；可用 HTTPS_PROXY 环境变量覆盖）
+export HTTPS_PROXY="${HTTPS_PROXY:-http://127.0.0.1:7897}"
+export NO_PROXY="${NO_PROXY:-127.0.0.1,localhost}"
 
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
@@ -88,8 +94,14 @@ tunnel_pid() {
 }
 
 start_tunnel() {
+  # 每次拉起前刷新凭据/AUTH（daemon 的 token 可能刚刚生成）
+  read_creds
   if [ -z "$CONTROL_PLANE_TUNNEL_ID" ] || [ -z "$CONTROL_PLANE_API_KEY" ]; then
     log "✗ 凭据缺失（CONTROL_PLANE_TUNNEL_ID/API_KEY 为空），跳过拉起（下轮重试）"
+    return 1
+  fi
+  if [ -z "$AGENT_CHATGPT_HELM_AUTH" ]; then
+    log "⚠ helm daemon token 尚不存在（daemon 未启动/未生成），跳过拉起（下轮重试）"
     return 1
   fi
   log "拉起 tunnel-client"
@@ -137,7 +149,10 @@ while true; do
   # 修复：：LAST_DAEMON_PID 为空（state 文件缺失/首见 daemon）
   # 时不得触发「daemon 重启」判定——否则每次循环都误判重启 → 隧道 15s 循环被杀重建，
   # 控制面永远连不稳，ChatGPT 侧任务全部丢失。首见只建立基线，隧道死活由 tunnel_ok 兜底。
-  if [ -n "$LAST_DAEMON_PID" ] && [ "$LAST_DAEMON_PID" != "$local_daemon_pid" ]; then
+  # 修复：：daemon 完全消失（local_daemon_pid 为空）时也不得触发「重启」判定
+  # ——web 重启窗口内 daemon 短暂缺席属正常，此时杀健康隧道只会制造抖动；
+  # 等 daemon 以新 pid 回归时再重建一次（MCP session 确实失效了）。
+  if [ -n "$local_daemon_pid" ] && [ -n "$LAST_DAEMON_PID" ] && [ "$LAST_DAEMON_PID" != "$local_daemon_pid" ]; then
     log "检测到 helm daemon 重启（pid $LAST_DAEMON_PID → $local_daemon_pid），重启隧道以重新初始化 MCP 会话"
     need_restart=1
   fi

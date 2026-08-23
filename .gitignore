@@ -5,7 +5,10 @@
 credentials*.yaml
 !credentials.example.yaml
 config/*.local.*
+credentials/
 token
+*.pem
+*.key
 
 # 运行时状态与日志
 *.log

@@ -52,12 +52,17 @@ for port in (3481, 3482):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 while True: time.sleep(5)
 PYEOF
+# 预清理：上次测试残留的监听者会导致 EADDRINUSE（偶发端口冲突）
+for p in 3481 3482; do
+  lsof -tiTCP:$p -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true
+done
+sleep 0.3
 python3 "$TMP/server.py" "$TMP" &
 SRV=$!
 sleep 1
 
 # source 脚本拿函数
-sed 's/^while true; do/while false; do/' "$TMP/dsh-chatgpt-connector/scripts/dsh-web-watchdog.sh" > "$TMP/extracted.sh"
+sed 's/^while true; do/while false; do/' "$(cd .. && pwd)/scripts/dsh-web-watchdog.sh" > "$TMP/extracted.sh"
 source "$TMP/extracted.sh"
 port_pid() { lsof -tiTCP:"$1" -sTCP:LISTEN 2>/dev/null | head -1; }
 is_dsh() { return 0; }

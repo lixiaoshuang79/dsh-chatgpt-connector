@@ -9,7 +9,7 @@
 set -u
 cd "$(dirname "$0")"
 
-KEEPALIVE="$TMP/dsh-chatgpt-connector/scripts/tunnel-client-keepalive.sh"
+KEEPALIVE="$(cd .. && pwd)/scripts/tunnel-client-keepalive.sh"
 TMP=$(mktemp -d /tmp/keepalive-test.XXXXXX)
 
 # fake tunnel-client：记录被调用次数与参数；模拟 3458 healthz 监听由测试端控制
@@ -50,6 +50,11 @@ check() { local name="$1"; shift; if "$@"; then PASS=$((PASS+1)); echo "  ✓ $n
 
 # 真实 HTTP 端点模拟：3471 = MCP healthz，3472 = tunnel healthz
 start_http_servers() { # $1=3471 up?, $2=3472 up?
+  # 预清理：上次测试残留的监听者会导致 EADDRINUSE（偶发端口冲突）
+  for p in 3471 3472; do
+    lsof -tiTCP:$p -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true
+  done
+  sleep 0.3
   python3 - "$TMP" << 'PYEOF' &
 import http.server, sys, os, time
 tmp = sys.argv[1]

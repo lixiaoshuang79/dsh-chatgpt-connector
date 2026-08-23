@@ -8,8 +8,9 @@
 
 set -u
 cd "$(dirname "$0")"
+REPO_ROOT="$(cd .. && pwd)"
 
-WATCHDOG="$TMP/dsh-chatgpt-connector/scripts/dsh-web-watchdog.sh"
+WATCHDOG="$REPO_ROOT/scripts/dsh-web-watchdog.sh"
 TMP=$(mktemp -d /tmp/watchdog-cleanup-test.XXXXXX)
 export WATCH_LOG_DIR="$TMP/logs"
 export WATCH_PID_FILE="$TMP/watchdog.pid"
@@ -103,7 +104,7 @@ while true; do sleep 5; done
 LKEOF
 sed 's/^#!\/usr\/bin\/env bash$/#!\/usr\/bin\/env bash\n# dsh-web-watchdog.sh mock/' "$TMP/lockholder.sh" > /dev/null
 # 起一个命令行含 dsh-web-watchdog.sh 的进程
-bash -c 'exec -a "bash /tmp/dsh-chatgpt-connector/scripts/dsh-web-watchdog.sh mock" bash -c "while true; do sleep 5; done"' &
+bash -c "exec -a \"bash $WATCHDOG mock\" bash -c \"while true; do sleep 5; done\"" &
 HOLDER_PID=$!
 sleep 0.3
 echo "$HOLDER_PID" > "$PID_FILE"

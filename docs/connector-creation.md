@@ -1,8 +1,7 @@
-# ChatGPT 连接器创建流程（多台机器：另建独立隧道）
+# ChatGPT 连接器创建流程（每个部署机器：独立隧道）
 
-> 本机已有连接器（`dsh-helm-<你的标识>`，App id `asdk_app_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`）。
-> **多台机器请走本流程另建独立 Tunnel + 独立连接器**——两个 tunnel 互不干扰，两台机器可同时在线。
-> 一台机器一个 tunnel 客户端，同一个 tunnel_id 同时只能有一个活跃客户端。
+> 每台机器建议使用**独立 Tunnel + 独立连接器**——两个 tunnel 互不干扰，多台机器可同时在线。
+> 一个 tunnel_id 同时只能有一个活跃 tunnel-client，因此不要在多台机器上复用同一个 tunnel_id。
 
 ## 总览
 
