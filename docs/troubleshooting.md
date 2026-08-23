@@ -32,7 +32,7 @@
 
 ### 1.3 隧道 15 秒循环被杀重建（keepalive 日志刷「检测到 helm daemon 重启」）
 
-**原因（早期版本的 bug）**：keepalive v2 早期版本的 state 文件只在健康分支写入；一旦进过重启分支，LAST_DAEMON_PID 永远不更新 → 每 15s 误判 daemon 重启 → 隧道循环被杀重建（实测 303 次/76 分钟）。此期间**本机探针全绿（假健康）**，ChatGPT 侧任务静默丢失。
+**原因（早期版本 bug）**：keepalive 早期版本的 state 文件只在健康分支写入；一旦进过重启分支，LAST_DAEMON_PID 永远不更新 → 每 15s 误判 daemon 重启 → 隧道循环被杀重建（实测 303 次/76 分钟）。此期间**本机探针全绿（假健康）**，ChatGPT 侧任务静默丢失。
 **修复**：判定后无条件写 daemon pid 基线 + `-n` 守卫（state 缺失/首见 daemon 只建基线不触发重启）。**本仓库已是修复版**，若日志出现该症状检查是否用了旧版脚本。
 **症状识别**：keepalive 日志反复出现「检测到 helm daemon 重启（pid → NNNN）」+ tunnel-client-manual.log 刷 poller stopped。
 
@@ -49,7 +49,7 @@
 ### 1.6 两台机器抢同一个 tunnel_id
 
 **原因**：同一 tunnel_id 同时只能有一个活跃 tunnel-client。
-**解法**：多台机器**另建独立 tunnel**（docs/connector-creation.md），两台机器可同时在线。
+**解法**：每台机器**另建独立 tunnel**（docs/connector-creation.md），多台机器可同时在线。
 
 ---
 

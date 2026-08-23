@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax check (bash -n)
+        run: |
+          for f in scripts/*.sh tests/*.sh; do
+            bash -n "$f"
+          done
+
+      - name: Run fault-injection test suite
+        run: bash tests/run-tests.sh
+
+      - name: Credential hygiene scan
+        run: |
+          # 仓库内不允许出现任何真实凭据形态（sk-/tunnel_/asdk_app_ 仅占位符允许）
+          if git grep -n -I -E '(sk-[A-Za-z0-9]{20,}|tunnel_[A-Za-z0-9]{20,}|asdk_app_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE)' -- . | grep -v 'sk-xxxxxxxx\|tunnel_xxxxxxxx'; then
+            echo "::error::Detected potential credential in repository"
+            exit 1
+          fi

@@ -36,10 +36,14 @@ export KEEPALIVE_STATE_FILE="$TMP/state"
 export KEEPALIVE_PID_FILE="$TMP/keepalive.pid"
 export KEEPALIVE_TUNNEL_BIN="$TMP/fake-tunnel"
 export KEEPALIVE_TUNNEL_LOG="$TMP/tunnel-manual.log"
-export HELM_MCP_PORT=3471
-export TUNNEL_HEALTH_PORT=3472
+# 端口在 start_http_servers 里动态分配（此处仅占位，会被覆盖）
+export HELM_MCP_PORT=0
+export TUNNEL_HEALTH_PORT=0
 export HELM_AUTH_FILE="$TMP/token"
 export KEEPALIVE_DAEMON_PATTERN="helm-test-isolated/agent-chatgpt-helm/lib/cli\\.js daemon"
+# 快照与防抖隔离（防写真实 ~/.dsh/logs）
+export KEEPALIVE_DIAG_DIR="$TMP/diagnostics"
+export KEEPALIVE_RESTART_TIMES_FILE="$TMP/restart-times"
 echo "test-token" > "$TMP/token"
 # 凭据文件
 export CRED_FILE="$TMP/creds"
@@ -48,16 +52,18 @@ printf 'CONTROL_PLANE_TUNNEL_ID: tunnel_test123\nCONTROL_PLANE_API_KEY: sk-test-
 PASS=0; FAIL=0
 check() { local name="$1"; shift; if "$@"; then PASS=$((PASS+1)); echo "  ✓ $name"; else FAIL=$((FAIL+1)); echo "  ✗ $name"; fi }
 
-# 真实 HTTP 端点模拟：3471 = MCP healthz，3472 = tunnel healthz
-start_http_servers() { # $1=3471 up?, $2=3472 up?
-  # 预清理：上次测试残留的监听者会导致 EADDRINUSE（偶发端口冲突）
-  for p in 3471 3472; do
-    lsof -tiTCP:$p -sTCP:LISTEN 2>/dev/null | xargs kill 2>/dev/null || true
-  done
-  sleep 0.3
+# 真实 HTTP 端点模拟：动态空闲端口（python bind(0) 分配，写 $TMP/ports 供 bash 读取）
+start_http_servers() {
   python3 - "$TMP" << 'PYEOF' &
 import http.server, sys, os, time
 tmp = sys.argv[1]
+# 先分配两个空闲端口（bind(0) 后立即关闭，再正式监听——竞争窗口极小）
+probe = http.server.HTTPServer(("127.0.0.1", 0), http.server.BaseHTTPRequestHandler)
+p1 = probe.server_address[1]; probe.server_close()
+probe = http.server.HTTPServer(("127.0.0.1", 0), http.server.BaseHTTPRequestHandler)
+p2 = probe.server_address[1]; probe.server_close()
+with open(os.path.join(tmp, "ports"), "w") as f:
+    f.write(f"{p1} {p2}\n")
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         port = self.server.server_address[1]
@@ -67,15 +73,21 @@ class H(http.server.BaseHTTPRequestHandler):
         else:
             self.send_response(503); self.end_headers(); self.wfile.write(b'down')
     def log_message(self, *a): pass
-s1 = http.server.HTTPServer(("127.0.0.1", 3471), H)
-s2 = http.server.HTTPServer(("127.0.0.1", 3472), H)
+s1 = http.server.HTTPServer(("127.0.0.1", p1), H)
+s2 = http.server.HTTPServer(("127.0.0.1", p2), H)
 import threading
 threading.Thread(target=s1.serve_forever, daemon=True).start()
 threading.Thread(target=s2.serve_forever, daemon=True).start()
 while True: time.sleep(5)
 PYEOF
   HTTP_PID=$!
-  echo up > "$TMP/state3471"; echo up > "$TMP/state3472"
+  # 等 python 分配好端口并写入（最多 5s）
+  local waited=0
+  while [ ! -f "$TMP/ports" ] && [ "$waited" -lt 50 ]; do sleep 0.1; waited=$((waited + 1)); done
+  read -r MCP_TEST_PORT TUNNEL_TEST_PORT < "$TMP/ports"
+  export HELM_MCP_PORT=$MCP_TEST_PORT
+  export TUNNEL_HEALTH_PORT=$TUNNEL_TEST_PORT
+  echo up > "$TMP/state$MCP_TEST_PORT"; echo up > "$TMP/state$TUNNEL_TEST_PORT"
   sleep 1
 }
 set_state() { echo "$2" > "$TMP/state$1"; }
@@ -93,8 +105,8 @@ kill_tunnel() { KILL_COUNT=$((KILL_COUNT+1)); echo "kill_tunnel called" >> "$TMP
 tunnel_pid() { echo "99999"; }
 
 echo "== 测试 1：3457 down + 3458 up（假健康场景）→ mcp_up=0, tunnel_up=1 =="
-set_state 3471 down
-set_state 3472 up
+set_state "$MCP_TEST_PORT" down
+set_state "$TUNNEL_TEST_PORT" up
 sleep 0.5
 mcp_ok=0; tunnel_ok=0
 mcp_up && mcp_ok=1
@@ -110,8 +122,8 @@ check "3457 down 但隧道自身健康 → 不杀隧道（避免无谓抖动）"
 check "start_tunnel 未被调用" test "$START_COUNT" = "0"
 
 echo "== 测试 2：3457 down + 3458 down → 隧道重启 =="
-set_state 3471 down
-set_state 3472 down
+set_state "$MCP_TEST_PORT" down
+set_state "$TUNNEL_TEST_PORT" down
 sleep 0.5
 tunnel_ok=0; tunnel_up && tunnel_ok=1
 need_restart=0
@@ -119,8 +131,8 @@ need_restart=0
 check "双 down 触发重启 (need_restart=1)" test "$need_restart" = "1"
 
 echo "== 测试 3：daemon PID 变化（web 重启连带 daemon 重启）→ 重启隧道重建 MCP 会话 =="
-set_state 3471 up
-set_state 3472 up
+set_state "$MCP_TEST_PORT" up
+set_state "$TUNNEL_TEST_PORT" up
 sleep 0.5
 START_COUNT=0
 # 模拟：旧 daemon pid 记录为 100，新 daemon pid 是 200
@@ -145,11 +157,11 @@ check "稳定状态不重启 (need_restart=0)" test "$need_restart" = "0"
 
 echo "== 测试 5：stale daemon.sock 场景（3457 无监听 + daemon 进程不在）→ v2 探针正确判定 =="
 # v2 用 /healthz 探针：3457 down 时 mcp_up=0（不再像 v1 那样 /mcp 401 永远失败）
-set_state 3471 down
+set_state "$MCP_TEST_PORT" down
 sleep 0.5
 mcp_ok=0; mcp_up && mcp_ok=1
 check "v2 探针正确反映 3457 状态（down→mcp_up=0）" test "$mcp_ok" = "0"
-set_state 3471 up
+set_state "$MCP_TEST_PORT" up
 sleep 0.5
 mcp_ok=0; mcp_up && mcp_ok=1
 check "v2 探针正确反映 3457 状态（up→mcp_up=1）" test "$mcp_ok" = "1"

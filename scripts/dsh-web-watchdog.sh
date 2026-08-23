@@ -123,6 +123,67 @@ is_dsh() {
   esac
 }
 
+# ---- liveness / stall detection（v3）----
+# helm daemon 的 MCP auth token（daemon 首启自动生成；不存在时返回 -1 未知）
+HELM_AUTH_FILE="${WATCH_HELM_AUTH_FILE:-$HOME/.agent-chatgpt-helm/token}"
+
+# 查 supervisor_health 的 activeSessions 数量。
+# 返回：活跃会话数（0+）；查询失败/无 token 返回 -1（表示"未知"，调用方按保守处理）。
+# 宽松超时（3s）——本查询只用于"是否保护不重启"的决策，失败不影响主探针。
+mcp_active_sessions() {
+  local tok sid out
+  tok=$(cat "$HELM_AUTH_FILE" 2>/dev/null || echo "")
+  [ -z "$tok" ] && { echo -1; return 1; }
+  sid=$(curl -sS --max-time 3 -D - -H "Authorization: Bearer $tok" \
+    -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" \
+    -X POST "http://127.0.0.1:${MCP_PORT}/mcp" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"dsh-watchdog","version":"3"}}}' 2>/dev/null \
+    | grep -i "^mcp-session-id:" | tr -d '\r' | awk '{print $2}')
+  [ -z "$sid" ] && { echo -1; return 1; }
+  out=$(curl -sS --max-time 3 -H "Authorization: Bearer $tok" -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" -H "Mcp-Session-Id: $sid" \
+    -X POST "http://127.0.0.1:${MCP_PORT}/mcp" \
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"supervisor_health","arguments":{}}}' 2>/dev/null)
+  echo "$out" | grep -o '"activeSessions":[0-9]*' | head -1 | cut -d: -f2
+}
+
+# 故障诊断快照：自愈动作前把现场状态落盘（~/.dsh/logs/diagnostics/<时间戳>/）
+# 内容不包含任何凭据值（token 只记录存在性）。
+DIAG_DIR="${WATCH_DIAG_DIR:-$LOG_DIR/diagnostics}"
+snapshot_diag() { # $1=原因
+  local ts dir
+  ts=$(date '+%Y%m%d-%H%M%S')
+  dir="$DIAG_DIR/$ts"
+  mkdir -p "$dir"
+  {
+    echo "time: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "reason: $1"
+    echo "watchdog pid: $$"
+    echo "token exists: $([ -f "$HELM_AUTH_FILE" ] && echo yes || echo no)"
+    echo "--- launchctl (dsh/deepseek/helm) ---"
+    launchctl list 2>/dev/null | grep -iE "dsh|deepseek|helm" || echo "(none)"
+    echo "--- processes ---"
+    ps aux | grep -E "bin\.ts web|cli\.js daemon|tunnel-client run" | grep -v grep || echo "(none)"
+    echo "--- ports (3080/3457/3458 healthz) ---"
+    for p in 3080 3457 3458; do
+      echo -n "$p: "
+      curl -sS --max-time 2 -o /dev/null -w "%{http_code} %{time_total}s" "http://127.0.0.1:$p/healthz" 2>/dev/null || echo -n "down"
+      echo
+    done
+    echo "--- watchdog log tail ---"
+    tail -30 "$LOG_FILE" 2>/dev/null
+    echo "--- keepalive log tail ---"
+    tail -20 "$LOG_DIR/tunnel-client-keepalive.log" 2>/dev/null
+    echo "--- tunnel log tail ---"
+    tail -10 "$LOG_DIR/tunnel-client-manual.log" 2>/dev/null
+  } > "$dir/state.txt" 2>&1
+  # 脱敏：凭据形态（sk-/tunnel_/asdk_app_ 后接长串）一律打码
+  sed -i '' -E 's/(sk-[A-Za-z0-9]{8})[A-Za-z0-9]+/\1<redacted>/g; s/(tunnel_[A-Za-z0-9]{8})[A-Za-z0-9]+/\1<redacted>/g; s/(asdk_app_[A-Za-z0-9]{8})[A-Za-z0-9]+/\1<redacted>/g' "$dir/state.txt" 2>/dev/null || true
+  log "诊断快照已写入 $dir"
+  KEEP_SNAPSHOT="${WATCH_KEEP_SNAPSHOT:-10}"
+  ls -1dt "$DIAG_DIR"/[0-9]* 2>/dev/null | tail -n +$((KEEP_SNAPSHOT + 1)) | xargs -r rm -rf
+}
+
 # 清理残留 helm daemon（web 被 kill 后可能成孤儿，需显式清理否则新 web attach 卡死 daemon）
 cleanup_orphan_daemon() {
   local pids pid
@@ -248,17 +309,31 @@ while true; do
   fi
 
   if [ "$ui_fail" -ge "$FAIL_THRESHOLD" ] && [ "$mcp_fail" -ge "$FAIL_THRESHOLD" ]; then
-    # 双端点都连续失败 → 真死锁，重启
+    # 双端点都连续失败 → 真死锁，重启（先快照）
     ui_fail=0; mcp_fail=0
+    snapshot_diag "dual-endpoint-down"
     restart_web
   elif [ "$ui_fail" -ge "$FAIL_THRESHOLD" ]; then
-    # 仅 UI 不健康但 MCP 还通：ChatGPT 链路不受影响，只告警不 kill
-    log "⚠ web UI 连续 ${ui_fail} 次不健康但 3457 MCP 健康（可能是高负载），不重启（保护活跃工具调用）"
-    ui_fail=0
+    # 仅 UI 不健康但 MCP 还通：区分「高负载/长任务」与「web 假死」。
+    # 有活跃会话 → 保护不重启（活跃工具调用/长任务进行中，绝不能打断）；
+    # 无活跃会话且翻倍阈值仍不健康 → 真·假死，快照后重启（自愈）。
+    act=$(mcp_active_sessions)
+    if [ -n "$act" ] && [ "$act" != "-1" ] && [ "$act" -gt 0 ]; then
+      log "⚠ web UI 连续 ${ui_fail} 次不健康但 3457 健康，且 ${act} 个活跃会话——保护不重启（高负载或长任务）"
+      ui_fail=0
+    elif [ "$ui_fail" -ge $((FAIL_THRESHOLD * 2)) ]; then
+      log "✗ web UI 连续 ${ui_fail} 次不健康、无活跃会话（MCP 通）——判定 web 假死，快照后重启"
+      ui_fail=0
+      snapshot_diag "ui-stall-no-active-sessions"
+      restart_web
+    else
+      log "⚠ web UI 连续 ${ui_fail} 次不健康、无活跃会话——暂不重启（翻倍阈值 ${FAIL_THRESHOLD}x2 后再判）"
+    fi
   elif [ "$mcp_fail" -ge "$FAIL_THRESHOLD" ]; then
-    # 仅 MCP 不健康但 UI 通：daemon 可能卡死/未拉起，重启 web（连带 daemon 重启）
+    # 仅 MCP 不健康但 UI 通：daemon 可能卡死/未拉起，重启 web（连带 daemon 重启，先快照）
     log "⚠ 3457 MCP 连续 ${mcp_fail} 次不健康但 web UI 健康，重启 web 以恢复 daemon"
     ui_fail=0; mcp_fail=0
+    snapshot_diag "mcp-down-ui-up"
     restart_web
   fi
 

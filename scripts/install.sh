@@ -11,7 +11,7 @@
 # 前置条件（见 README.md《前置条件》）：
 #   - macOS 14+，Node 22+，已 clone deepseek-harness 并安装依赖
 #   - 已安装: dsh CLI、tunnel-client、serena（uv tool install -p 3.13 serena-agent）
-#   - 已在 OpenAI Platform 创建本机专属 Tunnel + API Key（多台机器请另建独立隧道）
+#   - 已在 OpenAI Platform 创建本机专属 Tunnel + API Key（每台机器独立隧道）
 #   - 本机代理（Clash Verge 或等价物）监听 127.0.0.1:7897（海外 API 必须走代理）
 #
 # 幂等：重复运行安全；已安装项跳过，不重复 bootstrap。

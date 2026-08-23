@@ -14,6 +14,7 @@ WATCHDOG="$REPO_ROOT/scripts/dsh-web-watchdog.sh"
 TMP=$(mktemp -d /tmp/watchdog-cleanup-test.XXXXXX)
 export WATCH_LOG_DIR="$TMP/logs"
 export WATCH_PID_FILE="$TMP/watchdog.pid"
+export WATCH_HELM_AUTH_FILE="$TMP/watchdog-token"
 export WATCH_HELM_RUN_DIR="$TMP/helmrun"
 export WATCH_FAIL_THRESHOLD=3
 export WATCHDOG_INTERVAL=1

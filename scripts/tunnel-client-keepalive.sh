@@ -117,7 +117,7 @@ start_tunnel() {
     >> "$TUNNEL_LOG_FILE" 2>&1 &
 }
 
-# 杀掉本脚本管理的 tunnel（精确锚定）
+# 杀 掉本脚本管理的 tunnel（精确锚定）
 kill_tunnel() {
   local pid
   pid=$(tunnel_pid)
@@ -125,6 +125,61 @@ kill_tunnel() {
     kill "$pid" 2>/dev/null || true
     sleep 1
   fi
+}
+
+# 诊断快照：隧道重建前把现场状态落盘（~/.dsh/logs/diagnostics/<时间戳>/）
+# 内容脱敏：tunnel_id 等凭据形态值一律打码，不包含任何凭据明文。
+# 保留最近 KEEPALIVE_KEEP_SNAPSHOT 份。
+DIAG_DIR="${KEEPALIVE_DIAG_DIR:-$HOME/.dsh/logs/diagnostics}"
+snapshot_diag() { # $1=原因
+  local ts dir
+  ts=$(date '+%Y%m%d-%H%M%S')
+  dir="$DIAG_DIR/$ts"
+  mkdir -p "$dir"
+  {
+    echo "time: $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "reason: $1"
+    echo "keepalive pid: $$"
+    echo "daemon pid: ${local_daemon_pid:-unknown}"
+    echo "last daemon pid: ${LAST_DAEMON_PID:-none}"
+    echo "mcp_ok: ${mcp_ok:-0}  tunnel_ok: ${tunnel_ok:-0}"
+  } > "$dir/meta.txt" 2>&1
+  {
+    echo "--- processes ---"
+    ps aux | grep -E "bin\.ts web|cli\.js daemon|tunnel-client run" | grep -v grep || echo "(none)"
+    echo "--- ports (3080/3457/3458 healthz) ---"
+    for p in 3080 3457 3458; do
+      echo -n "$p: "
+      curl -sS --max-time 2 -o /dev/null -w "%{http_code} %{time_total}s" "http://127.0.0.1:$p/healthz" 2>/dev/null || echo -n "down"
+      echo
+    done
+    echo "--- keepalive log tail ---"
+    tail -30 "$LOG_FILE" 2>/dev/null
+    echo "--- tunnel log tail ---"
+    tail -15 "$TUNNEL_LOG_FILE" 2>/dev/null
+  } > "$dir/state.txt" 2>&1
+  # 脱敏：凭据形态（sk-/tunnel_/asdk_app_ 后接长串）一律打码
+  sed -i '' -E 's/(sk-[A-Za-z0-9]{8})[A-Za-z0-9]+/\1<redacted>/g; s/(tunnel_[A-Za-z0-9]{8})[A-Za-z0-9]+/\1<redacted>/g; s/(asdk_app_[A-Za-z0-9]{8})[A-Za-z0-9]+/\1<redacted>/g' "$dir/state.txt" 2>/dev/null || true
+  log "诊断快照已写入 $dir"
+  KEEP_SNAPSHOT="${KEEPALIVE_KEEP_SNAPSHOT:-10}"
+  ls -1dt "$DIAG_DIR"/[0-9]* 2>/dev/null | tail -n +$((KEEP_SNAPSHOT + 1)) | xargs -r rm -rf
+}
+
+# 防抖：重建限速（60s 内最多重建 3 次，防 daemon 来回切换时疯狂重建）
+RESTART_TIMES_FILE="${KEEPALIVE_RESTART_TIMES_FILE:-$HOME/.dsh/logs/tunnel-client-keepalive.restarts}"
+throttle_ok() {
+  local now n
+  now=$(date +%s)
+  if [ -f "$RESTART_TIMES_FILE" ]; then
+    awk -v now="$now" '{ if (now - $1 <= 60) print }' "$RESTART_TIMES_FILE" > "$RESTART_TIMES_FILE.tmp" && mv "$RESTART_TIMES_FILE.tmp" "$RESTART_TIMES_FILE"
+  fi
+  n=$(wc -l < "$RESTART_TIMES_FILE" 2>/dev/null || echo 0)
+  if [ "$n" -ge 3 ]; then
+    log "⚠ 60s 内已重建 $n 次，限速跳过本轮重建（防抖动）"
+    return 1
+  fi
+  date +%s >> "$RESTART_TIMES_FILE"
+  return 0
 }
 
 acquire_lock
@@ -169,14 +224,17 @@ while true; do
   fi
 
   if [ "$need_restart" = "1" ]; then
-    kill_tunnel
-    start_tunnel
-    # 更新状态（等待隧道健康确认）
-    sleep 2
-    if tunnel_up; then
-      log "✓ tunnel-client 已就绪"
-    else
-      log "⚠ tunnel-client 启动后 2s 未就绪（下轮重试）"
+    if throttle_ok; then
+      snapshot_diag "tunnel-restart"
+      kill_tunnel
+      start_tunnel
+      # 更新状态（等待隧道健康确认）
+      sleep 2
+      if tunnel_up; then
+        log "✓ tunnel-client 已就绪"
+      else
+        log "⚠ tunnel-client 启动后 2s 未就绪（下轮重试）"
+      fi
     fi
   else
     # 健康时无需动作（daemon pid 基线已在探测后无条件更新）

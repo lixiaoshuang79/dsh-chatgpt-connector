@@ -1,5 +1,19 @@
 # 架构与端口
 
+## 架构图
+
+```mermaid
+flowchart LR
+    U[ChatGPT 对话<br/>选择 connector] -->|OpenAI Secure MCP Tunnel<br/>控制面 api.openai.com| TC[tunnel-client<br/>健康端口 3458]
+    TC -->|本机 MCP<br/>Bearer token| H[helm daemon<br/>127.0.0.1:3457]
+    H --> S[Serena<br/>只读代码智能]
+    H --> W[DSH web<br/>3080]
+    WD[dsh-web-watchdog<br/>10s 探 3080+3457] -->|受控重启| W
+    KA[tunnel-client-keepalive<br/>15s 探 3458+3457] -->|拉起/重建| TC
+    style U fill:#10a37f,color:#fff
+    style H fill:#4f46e5,color:#fff
+```
+
 ## 组件
 
 | 组件 | 说明 | 来源 |

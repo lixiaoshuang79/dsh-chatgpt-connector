@@ -2,6 +2,21 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 语义化版本（[SemVer](https://semver.org/lang/zh-CN/)）。
 
+## [0.1.1] - 2026-08-24
+
+### Added
+
+- watchdog/keepalive **liveness/stall detection（假死检测）**：web UI 连续不健康但 MCP 健康时，查询 supervisor_health 的 activeSessions —— 有活跃会话则保护不重启（长任务进行中），无活跃会话且翻倍阈值（6 次 ≈ 60s）仍不健康才判定假死并重启
+- **故障诊断快照**：自愈动作（重启 web / 重建隧道）前把进程/端口/日志 tail 落盘到 `~/.dsh/logs/diagnostics/<时间戳>/`（保留最近 10 份），便于事后定位根因
+- keepalive **重建限速防抖**：60s 内最多重建 3 次，防止 daemon 短暂缺席时每 15s 疯狂重建隧道
+- 快照内容**凭据脱敏**：`sk-` / `tunnel_` / `asdk_app_` 等凭据形态值自动打码
+
+### Fixed
+
+- keepalive daemon-down 抖动：daemon 探测为空（web 重启窗口内短暂缺席）时不再误判「daemon 重启」触发隧道重建（实测曾每 15s 杀隧道重建 60+ 次）
+- 测试套件端口冲突：固定端口 + 预清理杀任意监听者 → 改为 **python bind(0) 动态分配空闲端口**（不再 kill 未知进程）
+- 测试隔离：快照/防抖状态文件指向测试临时目录，不写真实 `~/.dsh/logs`
+
 ## [0.1.0] - 2026-08-23
 
 ### Added
