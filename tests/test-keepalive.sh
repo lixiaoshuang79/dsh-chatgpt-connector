@@ -81,10 +81,15 @@ threading.Thread(target=s2.serve_forever, daemon=True).start()
 while True: time.sleep(5)
 PYEOF
   HTTP_PID=$!
-  # 等 python 分配好端口并写入（最多 5s）
+  # 等 python 分配好端口并写入（最多 5s）；read 后校验非空（防文件刚创建未写完的竞态）
   local waited=0
-  while [ ! -f "$TMP/ports" ] && [ "$waited" -lt 50 ]; do sleep 0.1; waited=$((waited + 1)); done
-  read -r MCP_TEST_PORT TUNNEL_TEST_PORT < "$TMP/ports"
+  while [ "$waited" -lt 50 ]; do
+    if [ -f "$TMP/ports" ]; then
+      read -r MCP_TEST_PORT TUNNEL_TEST_PORT < "$TMP/ports"
+      [ -n "$MCP_TEST_PORT" ] && [ -n "$TUNNEL_TEST_PORT" ] && break
+    fi
+    sleep 0.1; waited=$((waited + 1))
+  done
   export HELM_MCP_PORT=$MCP_TEST_PORT
   export TUNNEL_HEALTH_PORT=$TUNNEL_TEST_PORT
   echo up > "$TMP/state$MCP_TEST_PORT"; echo up > "$TMP/state$TUNNEL_TEST_PORT"

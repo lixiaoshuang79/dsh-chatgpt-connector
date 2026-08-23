@@ -61,9 +61,15 @@ while True: time.sleep(5)
 PYEOF
 python3 "$TMP/server.py" "$TMP" &
 SRV=$!
-# 等 python 分配端口（最多 5s）
+# 等 python 分配端口（最多 5s）；read 后校验非空（防文件刚创建未写完的竞态）
 waited=0
-while [ ! -f "$TMP/ports" ] && [ "$waited" -lt 50 ]; do sleep 0.1; waited=$((waited + 1)); done
+while [ "$waited" -lt 50 ]; do
+  if [ -f "$TMP/ports" ]; then
+    read -r WEB_TEST_PORT MCP_TEST_PORT < "$TMP/ports"
+    [ -n "$WEB_TEST_PORT" ] && [ -n "$MCP_TEST_PORT" ] && break
+  fi
+  sleep 0.1; waited=$((waited + 1))
+done
 read -r WEB_TEST_PORT MCP_TEST_PORT < "$TMP/ports"
 WEB_PORT=$WEB_TEST_PORT
 MCP_PORT=$MCP_TEST_PORT
