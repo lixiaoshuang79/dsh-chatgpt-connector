@@ -1,0 +1,14 @@
+# dsh-chatgpt-helm 隧道所有权补丁（追加到 ~/.dsh/profiles/web/cordis.patch.yml）
+#
+# 背景：daemon 自带 tunnel 管理（tunnelEnabled 默认 true）。若 daemon 与
+# tunnel-client-keepalive.sh 同时管理隧道，会双实例轮询同一 tunnel_id、
+# 互相 pkill，导致隧道抖动（502/连接反复断）。
+#
+# 修复：daemon 不自管 tunnel（tunnelEnabled: false），隧道由
+# tunnel-client-keepalive.sh（LaunchAgent 常驻）独占管理。
+#
+# 注意：这是要**合并进现有 cordis.patch.yml** 的片段，不是完整文件。
+# install.sh 会自动合并（已有该 id 则跳过）。
+- id: dsh-chatgpt-helm
+  config:
+    tunnelEnabled: false

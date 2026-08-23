@@ -1,0 +1,25 @@
+# 本仓库排除项：一切可能含机密/本机专属的文件
+
+# 凭据与令牌（任何环境都不入库）
+.credentials.yaml
+credentials*.yaml
+!credentials.example.yaml
+config/*.local.*
+token
+
+# 运行时状态与日志
+*.log
+*.state
+*.pid
+.agent-chatgpt-helm/
+run/
+
+# 本机专属
+.DS_Store
+*.local.yml
+.env
+.env.local
+
+# 构建产物
+node_modules/
+dist/
