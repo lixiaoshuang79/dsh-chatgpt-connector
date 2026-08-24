@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tunnel-client-keepalive — ChatGPT Helm 隧道客户端守护 v2（2026-08-23 稳定性重构）
+# tunnel-client-keepalive — ChatGPT Helm 隧道客户端守护
 #
 # 职责：每 15 秒检查 tunnel-client 健康 + helm daemon (3457) upstream 健康，
 # 任一异常时用正确环境（凭据 + 代理 + AUTH）重新拉起。
@@ -26,7 +26,7 @@ MCP_PORT="${HELM_MCP_PORT:-3457}"
 HEALTH_PORT="${TUNNEL_HEALTH_PORT:-3458}"
 HELM_AUTH_FILE="${HELM_AUTH_FILE:-$HOME/.agent-chatgpt-helm/token}"
 TUNNEL_LOG_FILE="${KEEPALIVE_TUNNEL_LOG:-$HOME/.dsh/logs/tunnel-client-manual.log}"
-# helm daemon 进程匹配模式（测试可注入隔离模式；默认精确匹配实际运行环境 daemon 命令行）
+# helm daemon 进程匹配模式（测试可注入隔离模式；默认匹配实际运行中的 daemon 命令行）
 DAEMON_PATTERN="${KEEPALIVE_DAEMON_PATTERN:-agent-chatgpt-helm/lib/cli\.js daemon}"
 mkdir -p "$(dirname "$LOG_FILE")"
 
@@ -38,6 +38,8 @@ acquire_lock() {
     if [ -n "$old_pid" ] && kill -0 "$old_pid" 2>/dev/null; then
       if ps -ww -p "$old_pid" -o command= 2>/dev/null | grep -q "tunnel-client-keepalive.sh"; then
         echo "[$(date '+%Y-%m-%d %H:%M:%S')] 已有实例在运行 (pid=${old_pid})，退出" >> "$LOG_FILE"
+        # launchd KeepAlive 会立即拉起新实例；sleep 避免空转重启循环
+        sleep 60
         exit 0
       fi
     fi
@@ -60,12 +62,15 @@ trap 'release_lock' EXIT
 CRED_FILE="${CRED_FILE:-$HOME/.dsh/.credentials.yaml}"
 
 read_creds() {
-  export CONTROL_PLANE_TUNNEL_ID=$(grep '^CONTROL_PLANE_TUNNEL_ID:' "$CRED_FILE" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
-  export CONTROL_PLANE_API_KEY=$(grep '^CONTROL_PLANE_API_KEY:' "$CRED_FILE" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
-  export AGENT_CHATGPT_HELM_AUTH=$(cat "$HELM_AUTH_FILE" 2>/dev/null || echo "")
+  CONTROL_PLANE_TUNNEL_ID=$(grep '^CONTROL_PLANE_TUNNEL_ID:' "$CRED_FILE" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
+  export CONTROL_PLANE_TUNNEL_ID
+  CONTROL_PLANE_API_KEY=$(grep '^CONTROL_PLANE_API_KEY:' "$CRED_FILE" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
+  export CONTROL_PLANE_API_KEY
+  AGENT_CHATGPT_HELM_AUTH=$(cat "$HELM_AUTH_FILE" 2>/dev/null || echo "")
+  export AGENT_CHATGPT_HELM_AUTH
 }
 
-# 海外 API 必须走本地代理（Clash Verge 7897；可用 HTTPS_PROXY 环境变量覆盖）
+# 海外 API 需经本地代理（默认 127.0.0.1:7897；可用 HTTPS_PROXY 环境变量覆盖）
 export HTTPS_PROXY="${HTTPS_PROXY:-http://127.0.0.1:7897}"
 export NO_PROXY="${NO_PROXY:-127.0.0.1,localhost}"
 
@@ -94,6 +99,10 @@ tunnel_pid() {
 }
 
 start_tunnel() {
+  if [ ! -x "$TUNNEL_CLIENT" ]; then
+    log "✗ tunnel-client 二进制不存在: ${TUNNEL_CLIENT}（跳过拉起，请安装后重试）"
+    return 1
+  fi
   # 每次拉起前刷新凭据/AUTH（daemon 的 token 可能刚刚生成）
   read_creds
   if [ -z "$CONTROL_PLANE_TUNNEL_ID" ] || [ -z "$CONTROL_PLANE_API_KEY" ]; then
@@ -117,14 +126,14 @@ start_tunnel() {
     >> "$TUNNEL_LOG_FILE" 2>&1 &
 }
 
-# 杀 掉本脚本管理的 tunnel（精确锚定）
+# 杀掉本脚本管理的 tunnel（精确锚定）
 kill_tunnel() {
   local pid
-  pid=$(tunnel_pid)
-  if [ -n "$pid" ]; then
+  # 循环杀全部匹配实例（防旧僵尸 + 新实例并存时只杀一个）
+  for pid in $(pgrep -f "tunnel-client run .*--mcp.server-url http://127.0.0.1:${MCP_PORT}/mcp" 2>/dev/null); do
     kill "$pid" 2>/dev/null || true
-    sleep 1
-  fi
+  done
+  sleep 1
 }
 
 # 诊断快照：隧道重建前把现场状态落盘（~/.dsh/logs/diagnostics/<时间戳>/）
@@ -201,23 +210,23 @@ while true; do
   # 3. 3457 upstream 挂但隧道活着 → 不杀隧道（daemon 恢复时隧道自动转发），
   #    但记录状态；若隧道自己也不健康则一并重启
   need_restart=0
-  # 修复：：LAST_DAEMON_PID 为空（state 文件缺失/首见 daemon）
-  # 时不得触发「daemon 重启」判定——否则每次循环都误判重启 → 隧道 15s 循环被杀重建，
-  # 控制面永远连不稳，ChatGPT 侧任务全部丢失。首见只建立基线，隧道死活由 tunnel_ok 兜底。
-  # 修复：：daemon 完全消失（local_daemon_pid 为空）时也不得触发「重启」判定
+  # LAST_DAEMON_PID 为空（state 文件缺失/首见 daemon）时不得触发「daemon 重启」判定
+  # ——否则每次循环都误判重启 → 隧道循环被杀重建，控制面永远连不稳，
+  # ChatGPT 侧任务全部丢失。首见只建立基线，隧道死活由 tunnel_ok 兜底。
+  # daemon 完全消失（local_daemon_pid 为空）时也不得触发「重启」判定
   # ——web 重启窗口内 daemon 短暂缺席属正常，此时杀健康隧道只会制造抖动；
   # 等 daemon 以新 pid 回归时再重建一次（MCP session 确实失效了）。
   if [ -n "$local_daemon_pid" ] && [ -n "$LAST_DAEMON_PID" ] && [ "$LAST_DAEMON_PID" != "$local_daemon_pid" ]; then
-    log "检测到 helm daemon 重启（pid $LAST_DAEMON_PID → $local_daemon_pid），重启隧道以重新初始化 MCP 会话"
+    log "检测到 helm daemon 重启（pid $LAST_DAEMON_PID → ${local_daemon_pid}），重启隧道以重新初始化 MCP 会话"
     need_restart=1
   fi
   if [ "$tunnel_ok" != "1" ]; then
     log "隧道 healthz 不健康（3458），重启"
     need_restart=1
   fi
-  # 修复：：无论是否重启隧道，本轮探测后立即更新 daemon pid 基线。
-  # 原实现只在「健康分支」（else）写 state，一旦进过重启分支就永远不再写，
-  # LAST_DAEMON_PID 永远不等于实际 pid → 每 15s 误判重启 → 隧道循环重启（实测 303 次）。
+  # 无论是否重启隧道，本轮探测后立即更新 daemon pid 基线。
+  # 原实现只在健康分支（else）写 state，一旦进过重启分支就永远不再写，
+  # LAST_DAEMON_PID 永远不等于实际 pid → 每 15s 误判重启 → 隧道循环重建。
   if [ -n "$local_daemon_pid" ]; then
     echo "$local_daemon_pid" > "$STATE_FILE"
     LAST_DAEMON_PID="$local_daemon_pid"

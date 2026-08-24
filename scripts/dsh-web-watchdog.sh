@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dsh-web-watchdog — dsh web 看门狗哨兵 v2（2026-08-23 稳定性重构）
+# dsh-web-watchdog — dsh web 守护
 #
 # 职责：每 N 秒检查 dsh web (3080) 与 helm MCP daemon (3457) 健康，仅在
 # **连续多次**双端点均不健康时才做受控重启。重启顺序可证明：
@@ -13,7 +13,7 @@
 #   - 单次 3s 健康检查失败即 kill → 3 次连续失败 + UI/MCP 双交叉确认才动作
 #     （高负载下 web 短暂不响应不再被误杀；3457 仍健康说明 ChatGPT 链路还通，
 #      绝不 kill）
-#   - 修复 "停止卡死实例 pid=" 空 pid bug（一次 lsof 取 pid 复用）
+#   - 修复 "停止卡死实例 pid=" 空 pid bug（一次 lsof 取 pid 的复用问题）
 #   - 修复 web 被 kill 后 helm daemon 成孤儿 → 新 web attach 卡死 daemon 的
 #     死锁：重启前显式清理残留 daemon 与陈旧 socket
 #   - 单实例锁升级为 PID 文件 + 存活校验（防双实例竞争）
@@ -36,7 +36,7 @@ FAIL_THRESHOLD="${WATCH_FAIL_THRESHOLD:-3}"
 WEB_DIE_TIMEOUT="${WATCH_WEB_DIE_TIMEOUT:-15}"
 # daemon 被 SIGTERM 后等待退出的最长时间
 DAEMON_DIE_TIMEOUT="${WATCH_DAEMON_DIE_TIMEOUT:-5}"
-# DSH checkout 目录。仓库跨机器同步，禁止写死本机绝对路径：
+# DSH checkout 目录（可用 DSH_HARNESS_DIR 覆盖）
 HARNESS_DIR="${DSH_HARNESS_DIR:-$HOME/deepseek/deepseek-harness}"
 HELM_RUN_DIR="${WATCH_HELM_RUN_DIR:-$HOME/.agent-chatgpt-helm/run}"
 HELM_SOCK="$HELM_RUN_DIR/daemon.sock"
@@ -51,11 +51,18 @@ export PATH="$HARNESS_DIR/.tools/node22/bin:/usr/local/bin:$HOME/.local/bin:/usr
 # 从私有凭据文件注入 ChatGPT Helm 隧道环境变量（文件不入库，脚本本身不含密钥值）
 CRED_FILE="$HOME/.dsh/.credentials.yaml"
 if [ -f "$CRED_FILE" ]; then
-  export CONTROL_PLANE_TUNNEL_ID=$(grep '^CONTROL_PLANE_TUNNEL_ID:' "$CRED_FILE" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
-  export CONTROL_PLANE_API_KEY=$(grep '^CONTROL_PLANE_API_KEY:' "$CRED_FILE" | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
+  CONTROL_PLANE_TUNNEL_ID=$(grep '^CONTROL_PLANE_TUNNEL_ID:' "$CRED_FILE" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
+  export CONTROL_PLANE_TUNNEL_ID
+  CONTROL_PLANE_API_KEY=$(grep '^CONTROL_PLANE_API_KEY:' "$CRED_FILE" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\''' | tr -d '\r')
+  export CONTROL_PLANE_API_KEY
+  if [ -z "$CONTROL_PLANE_TUNNEL_ID" ] || [ -z "$CONTROL_PLANE_API_KEY" ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⚠ 凭据文件存在但 CONTROL_PLANE_TUNNEL_ID/API_KEY 为空（daemon 将以空凭据启动，ChatGPT 侧将无法连接）" >> "$LOG_FILE"
+  fi
+else
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] ⚠ 凭据文件不存在: ${CRED_FILE}（daemon 将以空凭据启动，ChatGPT 侧将无法连接）" >> "$LOG_FILE"
 fi
 
-# 海外 API 直连不通时必须走本地代理（Clash Verge 7897），否则 tunnel-client 控制面轮询超时
+# 海外 API 需经本地代理（默认 127.0.0.1:7897），否则 tunnel-client 控制面轮询超时
 export HTTPS_PROXY="${HTTPS_PROXY:-http://127.0.0.1:7897}"
 export HTTP_PROXY="${HTTP_PROXY:-http://127.0.0.1:7897}"
 export ALL_PROXY="${ALL_PROXY:-socks5://127.0.0.1:7897}"
@@ -76,6 +83,8 @@ acquire_lock() {
       # 锁持有者还活着：确认它确实是 watchdog（防 PID 复用误判）
       if ps -ww -p "$old_pid" -o command= 2>/dev/null | grep -q "dsh-web-watchdog.sh"; then
         log "已有实例在运行 (pid=${old_pid})，退出"
+        # launchd KeepAlive 会立即拉起新实例；sleep 避免空转重启循环
+        sleep 60
         exit 0
       fi
     fi
@@ -123,7 +132,7 @@ is_dsh() {
   esac
 }
 
-# ---- liveness / stall detection（v3）----
+# ---- liveness / stall detection ----
 # helm daemon 的 MCP auth token（daemon 首启自动生成；不存在时返回 -1 未知）
 HELM_AUTH_FILE="${WATCH_HELM_AUTH_FILE:-$HOME/.agent-chatgpt-helm/token}"
 # 活跃会话保护宽限期：activeSessions>0 且 datapath stall 时，超过该秒数仍不恢复则强制重启
@@ -255,7 +264,11 @@ cleanup_orphan_daemon() {
 
 # 拉起 dsh web（带完整 env），等待 3080 + 3457 双就绪
 launch_web() {
-  log "拉起 dsh web（cwd=$HARNESS_DIR）"
+  if [ ! -x "$NODE_BIN" ]; then
+    log "✗ node 二进制不存在: ${NODE_BIN}（web 无法拉起，请确认 DSH_HARNESS_DIR 正确）"
+    return 1
+  fi
+  log "拉起 dsh web（cwd=${HARNESS_DIR}）"
   ( cd "$HARNESS_DIR" && nohup "$NODE_BIN" --import tsx/esm apps/cli/src/bin.ts web --no-open \
       >> "$LOG_DIR/dsh-web-watchdog-launch.log" 2>&1 & )
   local sec=0
@@ -276,13 +289,45 @@ launch_web() {
 }
 
 # 受控重启：kill web → 清 daemon → 删 sock → 拉起 → 双验证
+# 重启熔断：10 分钟内 ≥3 次 → 冷却 5 分钟（避免持续故障时无限重启风暴）
+restart_allowed() {
+  local now ts
+  if [ -n "$RESTART_BREAKER_UNTIL" ]; then
+    now=$(date +%s)
+    if [ "$now" -lt "$RESTART_BREAKER_UNTIL" ]; then
+      log "⚠ 重启熔断中（${RESTART_BREAKER_UNTIL}s 前触发），跳过重启，只探测"
+      return 1
+    fi
+    RESTART_BREAKER_UNTIL=""
+    RESTART_TIMES=""
+  fi
+  now=$(date +%s)
+  # 保留 10 分钟内的重启记录
+  RESTART_TIMES=$(echo "$RESTART_TIMES" | awk -v n="$now" '{for(i=1;i<=NF;i++) if(n-$i<=600) printf "%s ", $i; print ""}')
+  local count
+  count=$(echo "$RESTART_TIMES" | wc -w | tr -d ' ')
+  if [ "$count" -ge 3 ]; then
+    RESTART_BREAKER_UNTIL=$((now + 300))
+    RESTART_TIMES=""
+    log "⚠ 10 分钟内已重启 ${count} 次，进入 5 分钟冷却"
+    return 1
+  fi
+  RESTART_TIMES="$RESTART_TIMES $now"
+  return 0
+}
+
 restart_web() {
   local pid waited
   pid=$(port_pid "$WEB_PORT")
+  # 防误杀：端口被无关进程占用时（is_dsh 失败）不 kill，仅记录
+  if [ -n "$pid" ] && ! is_dsh; then
+    log "⚠ 3080 被非 dsh 进程 pid=$pid 占用，跳过 kill（避免误杀）"
+    pid=""
+  fi
   if [ -n "$pid" ]; then
     log "⚠ 双端点持续不健康（${FAIL_THRESHOLD} 次），停止 web pid=$pid"
     kill "$pid" 2>/dev/null || true
-    # 等待端口释放（web 优雅退出；优雅退出可能较慢，故给足窗口）
+    # 等待端口释放（web 优雅退出可能较慢，故给足窗口）
     waited=0
     while [ "$waited" -lt "$WEB_DIE_TIMEOUT" ]; do
       [ -z "$(port_pid "$WEB_PORT")" ] && break
@@ -307,13 +352,18 @@ for a in "$@"; do
 done
 
 acquire_lock
-log "==== dsh-web-watchdog v2 启动 (pid $$) 间隔=${INTERVAL}s 阈值=${FAIL_THRESHOLD} ===="
+log "==== dsh-web-watchdog 启动 (pid $$) 间隔=${INTERVAL}s 阈值=${FAIL_THRESHOLD} ===="
 
 ui_fail=0
 mcp_fail=0
 STALL_SINCE=""
 DATAPATH_FAIL=0
 LAST_ACT=0
+# 重启熔断：10 分钟内 ≥3 次重启 → 只探测 5 分钟（避免故障风暴）
+RESTART_TIMES=""
+RESTART_BREAKER_UNTIL=""
+# 最近一次 web 拉起时间（兜底拉起去重窗口）
+LAST_LAUNCH_TS=0
 while true; do
   ui_ok=0; mcp_ok=0
   port_pid "$WEB_PORT" >/dev/null && is_dsh && web_healthy && ui_ok=1
@@ -336,11 +386,13 @@ while true; do
   fi
 
   if [ "$ui_fail" -ge "$FAIL_THRESHOLD" ] && [ "$mcp_fail" -ge "$FAIL_THRESHOLD" ]; then
-    # 双端点都连续失败 → 真死锁，重启（先快照）
-    ui_fail=0; mcp_fail=0
-    STALL_SINCE=""; DATAPATH_FAIL=0
-    snapshot_diag "dual-endpoint-down"
-    restart_web
+    # 双端点都连续失败 → 真死锁，重启（先快照；熔断生效时跳过）
+    if restart_allowed; then
+      ui_fail=0; mcp_fail=0
+      STALL_SINCE=""; DATAPATH_FAIL=0
+      snapshot_diag "dual-endpoint-down"
+      restart_web
+    fi
   elif [ "$ui_fail" -ge "$FAIL_THRESHOLD" ]; then
     # 仅 UI 不健康但 MCP healthz 正常：MCP healthz 只是 daemon 进程活性，
     # 不能代表 session runtime 数据链。用 sessions_list（走 daemon→adapter→DSH）
@@ -363,10 +415,12 @@ while true; do
         # 按翻倍阈值重启，避免永久不动作）
         log "⚠ web UI 连续 ${ui_fail} 次不健康且无 token 无法探测 datapath（保守按无活跃处理）"
         if [ "$ui_fail" -ge $((FAIL_THRESHOLD * 2)) ]; then
-          log "✗ web UI 连续 ${ui_fail} 次不健康、datapath 不可探测——快照后重启"
-          ui_fail=0; STALL_SINCE=""; DATAPATH_FAIL=0
-          snapshot_diag "ui-stall-no-token"
-          restart_web
+          if restart_allowed; then
+            log "✗ web UI 连续 ${ui_fail} 次不健康、datapath 不可探测——快照后重启"
+            ui_fail=0; STALL_SINCE=""; DATAPATH_FAIL=0
+            snapshot_diag "ui-stall-no-token"
+            restart_web
+          fi
         fi
         ;;
       fail)
@@ -379,20 +433,24 @@ while true; do
           # 有活跃会话：保护窗口内不重启，超 grace 仍 stall 则强制重启
           elapsed=$((now - STALL_SINCE))
           if [ "$elapsed" -ge "$ACTIVE_STALL_GRACE" ]; then
-            log "✗ datapath stall 已 ${elapsed}s（活跃会话保护期 ${ACTIVE_STALL_GRACE}s 已过），快照后重启"
-            ui_fail=0; STALL_SINCE=""; DATAPATH_FAIL=0; LAST_ACT=0
-            snapshot_diag "datapath-stall-beyond-grace"
-            restart_web
+            if restart_allowed; then
+              log "✗ datapath stall 已 ${elapsed}s（活跃会话保护期 ${ACTIVE_STALL_GRACE}s 已过），快照后重启"
+              ui_fail=0; STALL_SINCE=""; DATAPATH_FAIL=0; LAST_ACT=0
+              snapshot_diag "datapath-stall-beyond-grace"
+              restart_web
+            fi
           else
             log "⚠ datapath stall ${DATAPATH_FAIL} 轮（${elapsed}s/${ACTIVE_STALL_GRACE}s 保护期内，${act} 个活跃会话），暂不重启"
           fi
         else
           # 无活跃会话：连续 2 轮 stall 即重启
           if [ "$DATAPATH_FAIL" -ge "$STALL_ROUNDS_TO_RESTART" ]; then
-            log "✗ datapath stall 连续 ${DATAPATH_FAIL} 轮、无活跃会话——判定 web 假死，快照后重启"
-            ui_fail=0; STALL_SINCE=""; DATAPATH_FAIL=0
-            snapshot_diag "datapath-stall-no-active"
-            restart_web
+            if restart_allowed; then
+              log "✗ datapath stall 连续 ${DATAPATH_FAIL} 轮、无活跃会话——判定 web 假死，快照后重启"
+              ui_fail=0; STALL_SINCE=""; DATAPATH_FAIL=0
+              snapshot_diag "datapath-stall-no-active"
+              restart_web
+            fi
           else
             log "⚠ datapath stall ${DATAPATH_FAIL}/${STALL_ROUNDS_TO_RESTART} 轮、无活跃会话——暂不重启"
           fi
@@ -401,17 +459,25 @@ while true; do
     esac
   elif [ "$mcp_fail" -ge "$FAIL_THRESHOLD" ]; then
     # 仅 MCP 不健康但 UI 通：daemon 可能卡死/未拉起，重启 web（连带 daemon 重启，先快照）
-    log "⚠ 3457 MCP 连续 ${mcp_fail} 次不健康但 web UI 健康，重启 web 以恢复 daemon"
-    ui_fail=0; mcp_fail=0
-    STALL_SINCE=""; DATAPATH_FAIL=0
-    snapshot_diag "mcp-down-ui-up"
-    restart_web
+    if restart_allowed; then
+      log "⚠ 3457 MCP 连续 ${mcp_fail} 次不健康但 web UI 健康，重启 web 以恢复 daemon"
+      ui_fail=0; mcp_fail=0
+      STALL_SINCE=""; DATAPATH_FAIL=0
+      snapshot_diag "mcp-down-ui-up"
+      restart_web
+    fi
   fi
 
-  # 兜底：web 不在但无失败计数（如手动关闭）→ 直接拉起
+  # 兜底：web 不在但无失败计数（如手动关闭）→ 直接拉起（60s 去重窗口，防双实例竞态）
   if [ "$ui_fail" = "1" ] && [ -z "$(port_pid "$WEB_PORT")" ]; then
-    ui_fail=0
-    launch_web
+    now=$(date +%s)
+    if [ $((now - LAST_LAUNCH_TS)) -ge 60 ]; then
+      ui_fail=0
+      LAST_LAUNCH_TS=$now
+      launch_web
+    else
+      log "⚠ 兜底拉起去重中（距上次拉起 ${LAST_LAUNCH_TS}s），跳过"
+    fi
   fi
 
   [ "$once" = "1" ] && break

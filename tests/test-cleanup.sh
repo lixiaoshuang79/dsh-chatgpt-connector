@@ -2,7 +2,7 @@
 # test-cleanup.sh — watchdog v2 的残留 daemon 清理 + 陈旧 socket 清理测试
 #
 # 隔离方式：WATCH_HELM_RUN_DIR / WATCH_LOG_DIR / WATCH_PID_FILE 指向 TMP，
-# fake daemon 进程使用隔离命令行模式（不匹配实际运行环境），不碰实际运行环境进程/端口。
+# fake daemon 进程使用隔离命令行模式（不匹配实际运行的 daemon），不碰实际运行环境进程/端口。
 #
 # 用法：bash test-cleanup.sh
 
@@ -31,12 +31,12 @@ check() { local name="$1"; shift; if "$@"; then PASS=$((PASS+1)); echo "  ✓ $n
 sed 's/^while true; do/while false; do/' "$WATCHDOG" > "$TMP/extracted.sh"
 source "$TMP/extracted.sh"
 
-# mock：避免真的去 kill 实际运行环境进程
+# mock：避免真的去 kill 实际运行的进程
 cleanup_orphan_daemon() {
   # 真实逻辑的隔离副本（只匹配隔离模式的 fake daemon；与修复后的真实脚本一致：
   # 无论是否有 daemon 进程，陈旧 socket 一律清理）
   local pids pid
-  pids=$(pgrep -f 'helm-test-cleanup/agent-chatgpt-helm/lib/cli\.js daemon' 2>/dev/null || true)
+  pids=$(pgrep -f 'helm-test-cleanup/agent-chatgpt-helm-test/lib/cli\.js daemon' 2>/dev/null || true)
   if [ -n "$pids" ]; then
     for pid in $pids; do
       kill "$pid" 2>/dev/null || true
@@ -66,7 +66,7 @@ check "陈旧 sock 被删除" test ! -e "$HELM_SOCK"
 echo "== 测试 2：fake daemon 进程存在 + 陈旧 sock → daemon 被杀 + sock 清理 =="
 cat > "$TMP/fake-daemon" << 'FAKEEOF'
 #!/usr/bin/env bash
-exec -a "node /tmp/helm-test-cleanup/agent-chatgpt-helm/lib/cli.js daemon --project /tmp" bash -c 'while true; do sleep 5; done'
+exec -a "node /tmp/helm-test-cleanup/agent-chatgpt-helm-test/lib/cli.js daemon --project /tmp" bash -c 'while true; do sleep 5; done'
 FAKEEOF
 chmod +x "$TMP/fake-daemon"
 "$TMP/fake-daemon" & DP=$!

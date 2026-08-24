@@ -18,7 +18,7 @@ flowchart LR
 
 | 组件 | 说明 | 来源 |
 |---|---|---|
-| ChatGPT | 远程推理大脑：读项目、架构设计、调试、审查 | OpenAI |
+| ChatGPT | 推理/审查端（读项目、架构设计、调试、审查） | OpenAI |
 | OpenAI Secure MCP Tunnel | 控制面轮询（api.openai.com）+ Cloudflare 隧道转发 MCP | OpenAI Platform 创建 |
 | tunnel-client | 隧道客户端（Go 二进制，内置 cloudflared） | OpenAI 提供，`~/.local/bin/tunnel-client` |
 | helm daemon | `agent-chatgpt-helm` 核心服务：MCP 服务端 + Serena 桥 + DSH 会话桥 | npm `@beforewave/agent-chatgpt-helm`（由 DSH 插件拉起） |
@@ -84,6 +84,6 @@ ChatGPT 对话
 | `~/.dsh/.credentials.yaml` | `CONTROL_PLANE_TUNNEL_ID` + `CONTROL_PLANE_API_KEY` | 手动创建（模板见 config/） |
 | `~/.agent-chatgpt-helm/token` | MCP Bearer token（32B base64url，0600） | **daemon 首次启动自动生成**，无需手动 |
 
-## 为什么需要代理
+## 代理要求
 
 `api.openai.com` 在本机网络环境直连不通（或超时），控制面轮询（`/v1/tunnels/<id>/poll`）全部失败 → ChatGPT 侧连接器探测不到隧道。所有海外请求必须走 `127.0.0.1:7897`。watchdog 与 keepalive 的 launchd 环境均已注入代理；Clash 未开时组件会告警但不会死，恢复后自动连通。

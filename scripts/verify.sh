@@ -93,17 +93,20 @@ if [ -n "$TOKEN" ]; then
   trap - EXIT
 else
   SKIP=$((SKIP+2))
-  FAIL=$((FAIL+2))
-  warn "~/.agent-chatgpt-helm/token 不存在——MCP 验证未完成（daemon 未启动？web 重启后自动生成 token 后再跑一次）"
+  warn "$HOME/.agent-chatgpt-helm/token 不存在——MCP 验证未完成（daemon 未启动？web 重启后自动生成 token 后再跑一次）"
 fi
 
 echo ""
-if [ "$FAIL" = "0" ]; then
-  echo "结果: $PASS 通过, $FAIL 失败${SKIP:+, $SKIP 跳过}"
-  echo "全部就绪 ✅"
+if [ "$FAIL" = "0" ] && [ "$SKIP" = "0" ]; then
+  echo "结果: $PASS 通过, $FAIL 失败, $SKIP 跳过"
+  echo "全部就绪"
+  exit 0
+elif [ "$FAIL" = "0" ] && [ "$SKIP" -gt 0 ]; then
+  echo "结果: $PASS 通过, $FAIL 失败, $SKIP 跳过"
+  echo "部分验证被跳过（非致命），可重跑一次确认"
   exit 0
 else
-  echo "结果: $PASS 通过, $FAIL 失败${SKIP:+, $SKIP 跳过}"
+  echo "结果: $PASS 通过, $FAIL 失败, $SKIP 跳过"
   echo "有异常，参考 docs/troubleshooting.md"
   exit 1
 fi

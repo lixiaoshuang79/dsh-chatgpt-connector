@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-stall-detection.sh — watchdog v3 datapath stall detection 独立测试
 #
-# 覆盖四场景（验收场景）：
+# 覆盖四类场景：
 #   A. UI fail + sessions_list ok        → datapath 活，清 stall，不重启
 #   B. UI fail + sessions_list fail + active=0 → 连续 2 轮 stall → snapshot + restart
 #   C. UI fail + sessions_list fail + active>0 within grace → 保护不重启

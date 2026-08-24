@@ -1,6 +1,6 @@
-# 排障手册（全量踩坑记录）
+# 排障手册
 
-> 本文档汇总了本套件在真实部署中踩过的所有坑。**部署前先通读**，遇到症状先查对应条目。
+> 本文档是部署中实际遇到的问题与解法，按症状查对应条目。
 
 ## 目录
 
@@ -32,7 +32,7 @@
 
 ### 1.3 隧道 15 秒循环被杀重建（keepalive 日志刷「检测到 helm daemon 重启」）
 
-**原因（早期版本 bug）**：keepalive 早期版本的 state 文件只在健康分支写入；一旦进过重启分支，LAST_DAEMON_PID 永远不更新 → 每 15s 误判 daemon 重启 → 隧道循环被杀重建（实测 303 次/76 分钟）。此期间**本机探针全绿（假健康）**，ChatGPT 侧任务静默丢失。
+**原因（早期版本 bug）**：keepalive 早期版本的 state 文件只在健康分支写入；一旦进过重启分支，LAST_DAEMON_PID 永远不更新 → 每 15s 误判 daemon 重启 → 隧道循环被杀重建。此期间**本机探针全绿（假健康）**，ChatGPT 侧任务静默丢失。
 **修复**：判定后无条件写 daemon pid 基线 + `-n` 守卫（state 缺失/首见 daemon 只建基线不触发重启）。**本仓库已是修复版**，若日志出现该症状检查是否用了旧版脚本。
 **症状识别**：keepalive 日志反复出现「检测到 helm daemon 重启（pid → NNNN）」+ tunnel-client-manual.log 刷 poller stopped。
 
@@ -136,7 +136,7 @@ div[contenteditable=true][aria-label="Chat with ChatGPT"]
 
 ### 4.4 代理端口不是 7897
 
-Clash Verge 默认混合端口 7897。若代理软件端口不同：
+代理软件默认混合端口为 7897（如 Clash 系）。若端口不同：
 - 手动改 plist 里的 EnvironmentVariables（HTTPS_PROXY 等）；
 - keepalive 脚本里 `HTTPS_PROXY="http://127.0.0.1:7897"` 是硬编码 export，需要同步改。
 

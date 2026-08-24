@@ -15,7 +15,6 @@
 # （若文件还有其他内容则只删这两行，文件保留），并删除 ~/.agent-chatgpt-helm/ 与日志。
 
 set -u
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HOME_DIR="$HOME"
 LAUNCH_AGENTS="$HOME_DIR/Library/LaunchAgents"
 PATCH_DEST="$HOME_DIR/.dsh/profiles/web/cordis.patch.yml"
@@ -40,7 +39,7 @@ done
 
 # 2. 从 cordis.patch.yml 精确删除 dsh-chatgpt-helm 补丁段
 if [ -f "$PATCH_DEST" ]; then
-  if grep -q '^\- id: dsh-chatgpt-helm' "$PATCH_DEST"; then
+  if grep -qE '^\s*- id: dsh-chatgpt-helm' "$PATCH_DEST"; then
     # 删除该段（id 行 + 缩进的 config 块）
     python3 - "$PATCH_DEST" << 'PYEOF'
 import sys, re
@@ -69,7 +68,8 @@ if removed:
 else:
     print("notfound")
 PYEOF
-    if [ $? -eq 0 ] && python3 -c "import sys; print(open('$PATCH_DEST').read().count('dsh-chatgpt-helm'))" 2>/dev/null | grep -q '^0$'; then
+    # 校验：以 `- id: dsh-chatgpt-helm` 行计数为准（注释里的同名文字不算）
+    if [ $? -eq 0 ] && ! grep -qE '^\s*- id: dsh-chatgpt-helm' "$PATCH_DEST"; then
       ok "已从 $PATCH_DEST 删除 dsh-chatgpt-helm 补丁段"
     else
       warn "补丁段删除结果异常，请手动检查 $PATCH_DEST"

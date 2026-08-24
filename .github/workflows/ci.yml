@@ -10,6 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Shell syntax check (bash -n)
         run: |
@@ -17,13 +19,28 @@ jobs:
             bash -n "$f"
           done
 
+      - name: bash 3.2 CJK-adjacent $var guard (regression)
+        run: |
+          # 防回归：bash 3.2 在 UTF-8 locale 下，中文标点紧贴 $var 会误报 unbound。
+          # 所有 $name 后紧跟非 ASCII 字节的写法都必须用 ${name}。
+          if grep -rnE '\$[A-Za-z_][A-Za-z0-9_]*[^ -~]' scripts/ tests/; then
+            echo "::error::CJK character directly after \$var (bash 3.2 unbound bug) — use \${var}"
+            exit 1
+          fi
+
       - name: Run fault-injection test suite
         run: bash tests/run-tests.sh
 
-      - name: Credential hygiene scan
+      - name: Credential hygiene scan (full history)
         run: |
-          # 仓库内不允许出现任何真实凭据形态（sk-/tunnel_/asdk_app_ 仅占位符允许）
-          if git grep -n -I -E '(sk-[A-Za-z0-9]{20,}|tunnel_[A-Za-z0-9]{20,}|asdk_app_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE)' -- . | grep -v 'sk-xxxxxxxx\|tunnel_xxxxxxxx'; then
-            echo "::error::Detected potential credential in repository"
+          # 历史 + 工作区都不允许出现任何真实凭据形态。
+          # 仅占位符（sk-xxx / tunnel_xxx / 全 x 序列）允许。
+          PAT='(sk-[A-Za-z0-9]{20,}|tunnel_[A-Za-z0-9]{20,}|asdk_app_[A-Za-z0-9]{20,}|BEGIN (RSA|OPENSSH|EC) PRIVATE)'
+          if git log --all -p --no-color | grep -n -I -E "$PAT" | grep -vE 'sk-[xX]{20,}|tunnel_[xX]{20,}|asdk_app_[xX]{20,}'; then
+            echo "::error::Detected potential credential in git history"
+            exit 1
+          fi
+          if git grep -n -I -E "$PAT" -- . | grep -vE 'sk-[xX]{20,}|tunnel_[xX]{20,}|asdk_app_[xX]{20,}'; then
+            echo "::error::Detected potential credential in working tree"
             exit 1
           fi

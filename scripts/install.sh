@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install.sh — dsh-chatgpt-connector 一键部署（macOS）
+# install.sh — dsh-chatgpt-connector 部署（macOS）
 #
 # 用法：
 #   ./install.sh                 # 检查依赖 + 安装 LaunchAgent + 合并 patch + 输出指引
@@ -12,7 +12,7 @@
 #   - macOS 14+，Node 22+，已 clone deepseek-harness 并安装依赖
 #   - 已安装: dsh CLI、tunnel-client、serena（uv tool install -p 3.13 serena-agent）
 #   - 已在 OpenAI Platform 创建本机专属 Tunnel + API Key（每台机器独立隧道）
-#   - 本机代理（Clash Verge 或等价物）监听 127.0.0.1:7897（海外 API 必须走代理）
+#   - 本地代理监听 127.0.0.1:7897（海外 API 需走代理）
 #
 # 幂等：重复运行安全；已安装项跳过，不重复 bootstrap。
 
@@ -39,7 +39,7 @@ echo ""
 
 # ---------- 1. 依赖检查 ----------
 echo "--- 1/5 依赖检查 ---"
-[ -d "$HARNESS_DIR" ] || fail "DSH checkout 不存在: $HARNESS_DIR（用 DSH_HARNESS_DIR 覆盖）"
+[ -d "$HARNESS_DIR" ] || fail "DSH checkout 不存在: ${HARNESS_DIR}（用 DSH_HARNESS_DIR 覆盖）"
 ok "DSH checkout: $HARNESS_DIR"
 
 command -v dsh >/dev/null 2>&1 \
@@ -49,7 +49,7 @@ TUNNEL_CLIENT="$HOME_DIR/.local/bin/tunnel-client"
 if [ -x "$TUNNEL_CLIENT" ] || command -v tunnel-client >/dev/null 2>&1; then
   ok "tunnel-client: $("$TUNNEL_CLIENT" --version 2>/dev/null || tunnel-client --version 2>/dev/null)"
 else
-  warn "tunnel-client 未找到（$TUNNEL_CLIENT）。请从 OpenAI Platform 下载（创建 Tunnel 时平台提供的 oai-tunnel-client），放到 ~/.local/bin/tunnel-client"
+  warn "tunnel-client 未找到（${TUNNEL_CLIENT}）。请从 OpenAI Platform 下载（创建 Tunnel 时平台提供的 oai-tunnel-client），放到 ~/.local/bin/tunnel-client"
 fi
 
 if command -v serena >/dev/null 2>&1; then
@@ -61,12 +61,12 @@ fi
 if [ -x "$NODE_BIN" ]; then
   ok "node: $NODE_BIN ($("$NODE_BIN" --version))"
 else
-  warn "harness 自带 node 不存在: $NODE_BIN（用 HARNESS_NODE_BIN 覆盖；或确认 harness 依赖已装）"
+  warn "harness 自带 node 不存在: ${NODE_BIN}（用 HARNESS_NODE_BIN 覆盖；或确认 harness 依赖已装）"
 fi
 
 # 代理检查（海外 API 必须走代理；代理不在时仅警告——Clash 可能未开，但脚本仍会装）
 if curl -sS --max-time 2 -x "$PROXY" -o /dev/null https://api.openai.com 2>/dev/null; then
-  ok "代理可用: $PROXY（api.openai.com 可通）"
+  ok "代理可用: ${PROXY}（api.openai.com 可通）"
 else
   warn "代理 $PROXY 当前不可用（Clash 未开？）。keepalive/watchdog 会带代理启动，恢复后隧道自动连通"
 fi
@@ -78,8 +78,8 @@ TUNNEL_ID=""; API_KEY=""
 if [ -f "$CRED_FILE" ]; then
   TUNNEL_ID=$(grep -E '^CONTROL_PLANE_TUNNEL_ID:' "$CRED_FILE" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\'' \r')
   API_KEY=$(grep -E '^CONTROL_PLANE_API_KEY:' "$CRED_FILE" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '"'\'' \r')
-  [ -n "$TUNNEL_ID" ] && ok "CONTROL_PLANE_TUNNEL_ID 已配置" || warn "CONTROL_PLANE_TUNNEL_ID 缺失（$CRED_FILE）"
-  [ -n "$API_KEY" ] && ok "CONTROL_PLANE_API_KEY 已配置" || warn "CONTROL_PLANE_API_KEY 缺失（$CRED_FILE）"
+  [ -n "$TUNNEL_ID" ] && ok "CONTROL_PLANE_TUNNEL_ID 已配置" || warn "CONTROL_PLANE_TUNNEL_ID 缺失（${CRED_FILE}）"
+  [ -n "$API_KEY" ] && ok "CONTROL_PLANE_API_KEY 已配置" || warn "CONTROL_PLANE_API_KEY 缺失（${CRED_FILE}）"
   chmod 600 "$CRED_FILE" 2>/dev/null && ok "凭据文件权限 600"
 else
   warn "$CRED_FILE 不存在。请创建（参考 config/credentials.example.yaml）填入本机专属 Tunnel ID + API Key"
@@ -105,16 +105,16 @@ if [ -f "$PATCH_DEST" ]; then
 else
   mkdir -p "$(dirname "$PATCH_DEST")"
   cp "$REPO_DIR/patches/helm-tunnel.patch.yml" "$PATCH_DEST"
-  ok "已创建 $PATCH_DEST（补丁文件）"
+  ok "已创建 ${PATCH_DEST}（补丁文件）"
 fi
 
 # ---------- 4. 安装 LaunchAgents ----------
 echo ""
 echo "--- 4/5 LaunchAgent 安装 ---"
 
-# web 双 owner 检测：若已存在管理 DSH web 的 LaunchAgent（如 com.deepseek.dsh），
+# web 双 owner 检测：若已存在管理 DSH web 的 LaunchAgent（如 com.example.dsh-web），
 # watchdog 与其并发拉起 web 会 EADDRINUSE。提示用户停用其一（不自动改动用户配置）。
-WEB_LA=$(ls "$LAUNCH_AGENTS" 2>/dev/null | grep -E '^(com\.deepseek\.dsh|.*dsh.*web.*)\.plist$' || true)
+WEB_LA=$(find "$LAUNCH_AGENTS" -maxdepth 1 -name '*.plist' -exec basename {} \; 2>/dev/null | grep -E '^(com\.deepseek\.dsh|.*dsh.*web.*)\.plist$' || true)
 if [ -n "$WEB_LA" ]; then
   warn "检测到可能管理 DSH web 的 LaunchAgent：$WEB_LA"
   say "    dsh-web-watchdog 也会拉起 web（3080）。两者并发会端口冲突，"

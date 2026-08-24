@@ -12,7 +12,7 @@
     <key>Label</key>
     <string>com.dsh-connector.tunnel-client-keepalive</string>
 
-    <!-- keepalive v2：每 15s 检查 tunnel-client 健康 + helm daemon(3457) upstream 健康，
+    <!-- 每 15s 检查 tunnel-client 健康 + helm daemon(3457) upstream 健康，
          异常时带正确凭据/代理重新拉起。单实例由脚本 PID 锁保证。 -->
     <key>ProgramArguments</key>
     <array>
@@ -24,7 +24,7 @@
     <key>RunAtLoad</key>
     <true/>
 
-    <!-- 脚本进程若意外退出，launchd 自动拉起（长期可靠性） -->
+    <!-- 脚本进程若意外退出，launchd 自动拉起 -->
     <key>KeepAlive</key>
     <true/>
 

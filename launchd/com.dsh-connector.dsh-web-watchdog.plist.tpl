@@ -11,7 +11,7 @@
     <key>Label</key>
     <string>com.dsh-connector.dsh-web-watchdog</string>
 
-    <!-- 看门狗 v2：常驻循环每 N 秒检查 3080(web)+3457(MCP) 双健康，
+    <!-- 常驻循环每 N 秒检查 3080(web)+3457(MCP) 双健康，
          连续多次双不健康才受控重启；单实例由脚本 PID 锁保证。
          注意：KeepAlive 常驻（无 StartInterval），脚本内部自带 sleep 循环。 -->
     <key>ProgramArguments</key>
@@ -24,7 +24,7 @@
     <key>RunAtLoad</key>
     <true/>
 
-    <!-- 脚本进程若意外退出，launchd 10 秒后自动拉起（长期可靠性） -->
+    <!-- 脚本进程若意外退出，launchd 10 秒后自动拉起 -->
     <key>KeepAlive</key>
     <true/>
 

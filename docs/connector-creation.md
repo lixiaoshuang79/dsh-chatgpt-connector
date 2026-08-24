@@ -3,7 +3,7 @@
 > 每台机器建议使用**独立 Tunnel + 独立连接器**——两个 tunnel 互不干扰，多台机器可同时在线。
 > 一个 tunnel_id 同时只能有一个活跃 tunnel-client，因此不要在多台机器上复用同一个 tunnel_id。
 
-> ⚠️ **UI 免责**：OpenAI/ChatGPT 的产品界面持续变化（2025-10「GPTs → ChatGPT apps」改名；Chat/Work 双标签；2026 有合并 tab 的预告）。以下流程基于 2026-08 实测，若界面有出入，以官方入口为准：Secure MCP Tunnel 官方指南 <https://developers.openai.com/api/docs/guides/secure-mcp-tunnels>。
+> **UI 免责**：OpenAI/ChatGPT 的产品界面持续变化（2025-10「GPTs → ChatGPT apps」改名；Chat/Work 双标签；2026 有合并 tab 的预告）。以下流程基于 2026-08 的界面编写，若界面有出入，以官方入口为准：Secure MCP Tunnel 官方指南 <https://developers.openai.com/api/docs/guides/secure-mcp-tunnels>。
 
 ## 总览
 
@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:3458/healthz
 3. **Create app**：
    - 类型选 **Tunnel**
    - 选你刚建的 Tunnel
-   - 填 App 名称（如 `dsh-helm-company`）
+   - 填 App 名称（如 `dsh-helm-<你的标识>`）
    - Auth 选 **No Authentication**（官方选项：OAuth / No Authentication / Mixed）
    - 勾选风险确认（大意：此 app 可访问你的文件/代码，风险自担）
    - **Create**
@@ -77,7 +77,7 @@ curl -s http://127.0.0.1:3458/healthz
 
 ---
 
-## 踩坑记录（务必读）
+## 踩坑记录
 
 | 现象 | 原因 | 解法 |
 |---|---|---|

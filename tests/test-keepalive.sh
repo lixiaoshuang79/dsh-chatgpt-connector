@@ -22,11 +22,11 @@ FAKEEOF
 chmod +x "$TMP/fake-tunnel"
 export FAKE_TUNNEL_LOG="$TMP/fake-tunnel.log"
 
-# fake helm daemon 进程（匹配 pgrep 模式 agent-chatgpt-helm/lib/cli.js daemon）
+# fake helm daemon 进程（argv 含 -test 标记，绝不匹配生产 pgrep 模式）
 cat > "$TMP/fake-daemon" << 'FAKEEOF'
 #!/usr/bin/env bash
-# 模拟 helm daemon：常驻，命令行含隔离测试模式（不匹配实际运行环境 daemon）
-exec -a "node /tmp/helm-test-isolated/agent-chatgpt-helm/lib/cli.js daemon --project /tmp" bash -c 'while true; do sleep 5; done'
+# 模拟 helm daemon：常驻，命令行含隔离测试标记（不匹配实际运行的 daemon）
+exec -a "node /tmp/helm-test-isolated/agent-chatgpt-helm-test/lib/cli.js daemon --project /tmp" bash -c 'while true; do sleep 5; done'
 FAKEEOF
 chmod +x "$TMP/fake-daemon"
 
@@ -40,7 +40,7 @@ export KEEPALIVE_TUNNEL_LOG="$TMP/tunnel-manual.log"
 export HELM_MCP_PORT=0
 export TUNNEL_HEALTH_PORT=0
 export HELM_AUTH_FILE="$TMP/token"
-export KEEPALIVE_DAEMON_PATTERN="helm-test-isolated/agent-chatgpt-helm/lib/cli\\.js daemon"
+export KEEPALIVE_DAEMON_PATTERN="helm-test-isolated/agent-chatgpt-helm-test/lib/cli\\.js daemon"
 # 快照与防抖隔离（防写真实 ~/.dsh/logs）
 export KEEPALIVE_DIAG_DIR="$TMP/diagnostics"
 export KEEPALIVE_RESTART_TIMES_FILE="$TMP/restart-times"
