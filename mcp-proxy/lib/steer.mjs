@@ -1,13 +1,11 @@
 /**
- * 指令立即插队/纠偏（steer）核心（vendored from dsh-helm
- * packages/node-agent/src/steer.ts @ 3c3219d，2026-08-24；同源同步维护）。
+ * 指令立即插队/纠偏（steer）核心。
  *
- * 协议事实（2026-08-24 对本机 DSH 0.1.1 实测，与 dsh-helm 同源）：
- * - DSH MCP 工具层（/mcp sessions_prompt）schema 无 mode 参数（additionalProperties:false），
- *   未知键被静默忽略 → mode 无法经 MCP 工具层透传；
- * - DSH 宿主 API（http://127.0.0.1:3080/api/session.prompt，loopback 无鉴权）接受
- *   payload { sessionId, mode: 'queue'|'steer', content: [{type:'text',text}] }，
- *   mode 枚举校验错误里官方只列 'queue'/'steer' 两值；
+ * 协议事实（2026-08-24 对本机 DSH 0.1.1 实测）：
+ * - DSH MCP 工具层（/mcp sessions_prompt）schema 无 mode 参数
+ *   （additionalProperties:false），未知键被静默忽略 → mode 无法经 MCP 工具层透传；
+ * - DSH 宿主 API（http://127.0.0.1:3080/api/session.prompt，loopback 无鉴权）
+ *   接受 payload { sessionId, mode: 'queue'|'steer', content: [{type:'text',text}] }；
  * - 响应只有 { accepted: true }，不带 placement/steered 字段；
  * - 运行中会话 + mode:'steer'：真实注入（session.history 事件流出现
  *   agent/inbox/spliced + turn 递增）；空闲会话 + steer 也被接受（直接开新回合）；

@@ -1,19 +1,22 @@
 /**
- * 会话摘要核心（vendored from dsh-helm packages/node-agent/src/summary.ts
- * @ 3c3219d，2026-08-24；与 dsh-helm 同源同步维护）。
+ * 会话摘要核心：sessions_get 响应瘦身。
  *
- * 单机 connector 的场景与 dsh-helm 相同：sessions_get 原样返回 DSH 完整
- * structuredContent（大 session 单次响应几十上百 KB），ChatGPT 侧无瘦身。
- * 本模块提供两层隔离（与 dsh-helm 完全同构）：
- * - P0：默认只返回结构化摘要（~KB），include_messages=true 才走完整历史。
- * - P2：摘要按 ~/.dsh/connector/summaries/<session_id>.json 缓存（0600，TTL 60s）。
+ * 病灶：sessions_get 原样返回 DSH 的完整 structuredContent（messages 全量），
+ * 大 session 单次响应可达几十上百 KB（实测 75KB+）。
  *
- * DSH daemon（agent-chatgpt-helm 0.1.1）探测结论（2026-08-24，与 dsh-helm 同源）：
- * - sessions_get inputSchema 仅 { agent?, session_id, max_messages?(1..100) }；
- *   未知键被静默忽略（beforeSeq 无效 → DSH 0.1.1 无真实翻页，可达上限 100 条）。
- * - 返回 structuredContent.session = { id, agent, status, workspace, title,
- *   updatedAt, messages:[{seq,time,role,text}], lastAssistantText, native }。
- * - 无 createdAt / 无 token 统计字段 → created_at 空串、token 估算（字符数/4）。
+ * 本模块提供两层隔离：
+ * - 默认只返回结构化摘要（~KB）：current_goal 行动性排序 / last_user_message /
+ *   recent_evidence / history_ref / 凭据清洗；include_messages=true 才走完整历史。
+ * - 摘要按 ~/.dsh/connector/summaries/<session_id>.json 缓存（0600，TTL 60s），
+ *   命中直接返回、不调 DSH；PROMPT/RESUME/CANCEL 成功后失效。
+ *
+ * DSH daemon（agent-chatgpt-helm 0.1.1）sessions_get 探测结论（2026-08-24）：
+ * 1. inputSchema 仅 { agent?, session_id, max_messages?(1..100) }；未知键被
+ *    静默忽略（beforeSeq 无效 → DSH 0.1.1 无真实翻页，history_ref 可达上限 100 条）。
+ * 2. 返回 structuredContent.session = { id, agent, status, workspace, title,
+ *    updatedAt, messages:[{seq,time,role,text}], lastAssistantText, native }。
+ * 3. max_messages 参数有效（不传默认最后 10 条）；无 createdAt / 无 token 统计
+ *    → created_at 空串、token 估算（字符数/4）。
  */
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -26,7 +29,7 @@ export const MAX_SUMMARY_CHARS = 300
 export const SUMMARY_TTL_MS = 60_000
 /** 摘要信息来源窗口：向 DSH 取最后 N 条消息。 */
 export const SUMMARY_WINDOW = 20
-/** 摘要缓存目录（connector 独立于 dsh-helm 的 ~/.dsh/helm）。 */
+/** 摘要缓存目录（connector 专用，不与其他工具共享）。 */
 export const SUMMARY_CACHE_DIR = join(homedir(), '.dsh', 'connector', 'summaries')
 
 /**

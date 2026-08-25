@@ -1,13 +1,13 @@
 /**
- * Response size guard（vendored from dsh-helm packages/hub/src/mcp/guard.ts
- * @ 3c3219d，2026-08-24；同源同步维护）。
- *
- * 每条工具响应在离开代理前都经过 applyGuard()：
+ * Response size guard：每条工具响应在离开代理前都经过 applyGuard()。
  * - text ≤ MAX_RESPONSE_BYTES（UTF-8 字节数）→ 原样直通（返回原引用）；
  * - 超限且 text 是合法 JSON → smart truncate：优先收窄最大的内容类字符串
  *   字段、宽度型载荷按比例砍尾部元素，挂 `truncated: { original_size,
  *   returned_size, tool }` 元数据——返回文本必须仍是合法 JSON（硬要求）；
  * - 超限且 text 不可解析（纯文本）→ UTF-8 边界安全截断 + 标记。
+ *
+ * 本 guard 是兜底防线：sessions_get 默认摘要瘦身是第一道防线，
+ * 任何工具响应超限最终都会在这里被处理。
  */
 
 /** 单条 MCP 工具响应文本的字节上限（UTF-8）。 */

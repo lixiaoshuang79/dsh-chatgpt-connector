@@ -4,12 +4,12 @@
  *
  * 拓扑：ChatGPT ── Tunnel ──> tunnel-client ──> mcp-proxy (3461/mcp) ──> helm daemon (3457) ──> DSH web (3080)
  *
- * 在 tunnel 与 daemon 之间加一层轻量代理，把 dsh-helm 的升级能力带到单机链路：
- *  - 内容瘦身：sessions_get 默认返回结构化摘要（lib/summary.mjs，与 dsh-helm 同源）
+ * 在 tunnel 与 daemon 之间加一层轻量代理，为单机链路提供三项升级能力：
+ *  - 内容瘦身：sessions_get 默认返回结构化摘要（lib/summary.mjs）
  *  - 插队机制：sessions_prompt mode=steer 经 DSH 宿主 API 注入运行中回合（lib/steer.mjs）
  *  - 响应守卫：所有 tools/call 响应过 MAX_RESPONSE_BYTES 截断（lib/guard.mjs）
  *
- * HTTP 面与 dsh-helm hub MCP（3471）同构：POST /mcp 的 JSON-RPC
+ * HTTP 面为标准 MCP streamable HTTP 子集：POST /mcp 的 JSON-RPC
  * （initialize / notifications/* / tools/list / tools/call）+ GET /healthz。
  * 零第三方依赖（Node 原生 http/fetch）。
  */
@@ -24,12 +24,9 @@ export const DEFAULT_PORT = 3461
 export const DEFAULT_HOST_API_URL = 'http://127.0.0.1:3080'
 export const PROXY_VERSION = '0.2.0'
 
-const WRITE_TOOLS = new Set([
-  'sessions_prompt', 'sessions_resume', 'sessions_cancel', 'sessions_create',
-  'code_use_workspace', 'code_write_file', 'code_apply_patch',
-])
+const WRITE_TOOLS = new Set(['sessions_prompt', 'sessions_resume', 'sessions_cancel'])
 
-/** 工具调用后的摘要缓存失效（与 dsh-helm agent 同款：写操作后不读脏）。 */
+/** 会话写操作后的摘要缓存失效（写后不读脏缓存）。 */
 function invalidateAfter(summaries, name, args) {
   const sid = args?.session_id
   if (!sid) return
@@ -38,7 +35,7 @@ function invalidateAfter(summaries, name, args) {
   }
 }
 
-/** 单条 MCP 响应包装（与 dsh-helm hub 同构：结构化内容 JSON 进 text 块）。 */
+/** 单条 MCP 响应包装：结构化内容 JSON 进 text 块（MCP content 标准）。 */
 function text(payload) {
   return { content: [{ type: 'text', text: JSON.stringify(payload) }] }
 }

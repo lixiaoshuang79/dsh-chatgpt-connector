@@ -1,9 +1,6 @@
 /**
- * MCP client 核心（模式 vendored from dsh-helm
- * packages/node-agent/src/bridge.ts @ 3c3219d；同源同步维护）。
- *
- * 以标准 MCP（initialize / tools/list / tools/call）连本机 helm daemon
- * `http://127.0.0.1:3457/mcp`（Bearer token），维护 mcp-session-id。
+ * MCP client：以标准 MCP（initialize / tools/list / tools/call）连本机 helm
+ * daemon `http://127.0.0.1:3457/mcp`（Bearer token），维护 mcp-session-id。
  * 零第三方依赖（Node 原生 fetch）。
  */
 
