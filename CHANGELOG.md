@@ -2,6 +2,22 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 语义化版本（[SemVer](https://semver.org/lang/zh-CN/)）。
 
+## [0.2.0] - 2026-08-24
+
+### Added
+
+- **mcp-proxy（升级能力层）**：tunnel 与 helm daemon 之间的本地 MCP 代理（`mcp-proxy/`，Node 原生零依赖），把 dsh-helm 的升级能力带到单机链路：
+  - **内容瘦身**：`sessions_get` 默认返回结构化摘要（~KB：current_goal 行动性排序附来源 seq / recent_evidence / history_ref / 凭据清洗 / 60s 缓存，写操作后失效）；完整历史显式 `include_messages=true` 才取
+  - **插队机制**：`sessions_prompt mode=steer` 经 DSH 宿主 API（3080）立即注入运行中回合，结构化返回 `steered/queued/rejected/unavailable`（宿主不可达不崩链路，queue 照常）
+  - **响应守卫**：所有 `tools/call` 响应超 50KB 统一截断（保持合法 JSON + `truncated` 元数据）
+  - 逻辑与 dsh-helm 同源（vendored @ 3c3219d），单机无需安装 dsh-helm
+- launchd 模板 `com.dsh-connector.mcp-proxy` + install/verify/uninstall 接线；tunnel 默认走代理（`HELM_MCP_PORT=3461`，keepalive 探针拆分 `HELM_UPSTREAM_PORT=3457` 保持真实 daemon 活性检测）
+- `tests/test-proxy.mjs`（node:test 全链路 6 用例：摘要瘦身/守卫截断/steer 插队/降级/透传与缓存失效/daemon 容错），纳入 `tests/run-tests.sh`
+
+### Fixed
+
+- keepalive 健康探针端口与 tunnel server-url 端口解耦（代理介入后探针仍探真实 daemon）
+
 ## [0.1.1] - 2026-08-24
 
 ### Added

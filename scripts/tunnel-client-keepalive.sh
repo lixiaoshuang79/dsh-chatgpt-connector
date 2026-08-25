@@ -23,6 +23,9 @@ LOG_FILE="${KEEPALIVE_LOG_FILE:-$HOME/.dsh/logs/tunnel-client-keepalive.log}"
 STATE_FILE="${KEEPALIVE_STATE_FILE:-$HOME/.dsh/logs/tunnel-client-keepalive.state}"
 PID_FILE="${KEEPALIVE_PID_FILE:-$HOME/.dsh/logs/tunnel-client-keepalive.pid}"
 MCP_PORT="${HELM_MCP_PORT:-3457}"
+# daemon upstream 探针端口：tunnel 经 mcp-proxy（3461）后，探针仍必须探真实
+# daemon（3457）——否则"daemon 挂但代理活"会被误判健康。
+UPSTREAM_PORT="${HELM_UPSTREAM_PORT:-$MCP_PORT}"
 HEALTH_PORT="${TUNNEL_HEALTH_PORT:-3458}"
 HELM_AUTH_FILE="${HELM_AUTH_FILE:-$HOME/.agent-chatgpt-helm/token}"
 TUNNEL_LOG_FILE="${KEEPALIVE_TUNNEL_LOG:-$HOME/.dsh/logs/tunnel-client-manual.log}"
@@ -80,7 +83,7 @@ log() {
 
 # helm daemon (MCP upstream) 是否健康：/healthz 免认证，200 = 活
 mcp_up() {
-  curl -fsS --max-time 3 "http://127.0.0.1:${MCP_PORT}/healthz" >/dev/null 2>&1
+  curl -fsS --max-time 3 "http://127.0.0.1:${UPSTREAM_PORT}/healthz" >/dev/null 2>&1
 }
 
 # 隧道自身 healthz 是否 live

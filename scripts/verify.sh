@@ -34,6 +34,7 @@ check "DSH web UI (3080)" curl -fsS --max-time 3 http://127.0.0.1:3080/
 
 # 2. helm daemon MCP
 check "helm daemon MCP (3457 /healthz)" curl -fsS --max-time 3 http://127.0.0.1:3457/healthz
+check "mcp-proxy (3461 /healthz)" curl -fsS --max-time 3 http://127.0.0.1:3461/healthz
 
 # 3. tunnel
 check "tunnel-client (3458 /healthz)" curl -fsS --max-time 3 http://127.0.0.1:3458/healthz

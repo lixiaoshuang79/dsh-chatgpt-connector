@@ -22,5 +22,16 @@ for t in test-watchdog-decision.sh test-keepalive.sh test-cleanup.sh test-load.s
   fi
 done
 rm -f /tmp/helm-test-$$.log
+
+# mcp-proxy（升级能力层）node:test 套件
+echo "===== test-proxy.mjs (node:test) ====="
+if node --test test-proxy.mjs > /tmp/helm-proxy-test-$$.log 2>&1; then
+  grep -E '^# (tests|pass|fail)' /tmp/helm-proxy-test-$$.log
+  TOTAL=$((TOTAL+1))
+else
+  echo "✗ test-proxy.mjs 失败:"; tail -20 /tmp/helm-proxy-test-$$.log
+  FAILED=$((FAILED+1))
+fi
+rm -f /tmp/helm-proxy-test-$$.log
 echo
-if [ "$FAILED" = "0" ]; then echo "全部测试套件通过（$TOTAL/5）"; exit 0; else echo "有 $FAILED 个测试套件失败"; exit 1; fi
+if [ "$FAILED" = "0" ]; then echo "全部测试套件通过（$TOTAL 套件）"; exit 0; else echo "有 $FAILED 个测试套件失败"; exit 1; fi

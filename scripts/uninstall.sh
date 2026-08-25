@@ -29,7 +29,7 @@ warn() { echo "  ⚠ $*"; }
 echo "==== dsh-chatgpt-connector 卸载 ===="
 
 # 1. 停止并移除 LaunchAgents
-for tpl in com.dsh-connector.tunnel-client-keepalive com.dsh-connector.dsh-web-watchdog; do
+for tpl in com.dsh-connector.mcp-proxy com.dsh-connector.tunnel-client-keepalive com.dsh-connector.dsh-web-watchdog; do
   PLIST="$LAUNCH_AGENTS/$tpl.plist"
   launchctl bootout "gui/$(id -u)/$tpl" 2>/dev/null && ok "已停止并移除 $tpl" || warn "$tpl 未在运行（或已移除）"
   if [ -f "$PLIST" ]; then
@@ -109,6 +109,6 @@ fi
 echo ""
 echo "==== 卸载完成 ===="
 echo "残留检查："
-echo "  launchctl list | grep -E 'dsh-web-watchdog|tunnel-client-keepalive'  （应无输出）"
+echo "  launchctl list | grep -E 'dsh-web-watchdog|tunnel-client-keepalive|mcp-proxy'  （应无输出）"
 echo "  ls $LAUNCH_AGENTS | grep -E 'dsh-web-watchdog|tunnel-client-keepalive' （应无输出）"
 echo "如需恢复：重新运行 ./scripts/install.sh"

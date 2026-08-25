@@ -126,12 +126,13 @@ if [ "${INSTALL_SKIP_SERVICES:-0}" = "1" ]; then
   say "INSTALL_SKIP_SERVICES=1，跳过 launchd 安装"
 else
   mkdir -p "$LAUNCH_AGENTS" "$HOME_DIR/.dsh/logs"
-  for tpl in com.dsh-connector.tunnel-client-keepalive com.dsh-connector.dsh-web-watchdog; do
+  for tpl in com.dsh-connector.mcp-proxy com.dsh-connector.tunnel-client-keepalive com.dsh-connector.dsh-web-watchdog; do
     SRC="$REPO_DIR/launchd/$tpl.plist.tpl"
     DST="$LAUNCH_AGENTS/$tpl.plist"
     sed -e "s|__REPO_DIR__|$REPO_DIR|g" \
         -e "s|__HOME__|$HOME_DIR|g" \
         -e "s|__HARNESS_DIR__|$HARNESS_DIR|g" \
+        -e "s|__NODE_BIN__|$NODE_BIN|g" \
         "$SRC" > "$DST"
     # 卸载旧 job（幂等）
     launchctl bootout "gui/$(id -u)/$tpl" 2>/dev/null || true

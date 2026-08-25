@@ -5,7 +5,8 @@
 ```mermaid
 flowchart LR
     U[ChatGPT 对话<br/>选择 connector] -->|OpenAI Secure MCP Tunnel<br/>控制面 api.openai.com| TC[tunnel-client<br/>健康端口 3458]
-    TC -->|本机 MCP<br/>Bearer token| H[helm daemon<br/>127.0.0.1:3457]
+    TC -->|本机 MCP<br/>Bearer token| P[mcp-proxy<br/>127.0.0.1:3461]
+    P -->|转发 + 摘要/steer/守卫| H[helm daemon<br/>127.0.0.1:3457]
     H --> S[Serena<br/>只读代码智能]
     H --> W[DSH web<br/>3080]
     WD[dsh-web-watchdog<br/>10s 探 3080+3457] -->|受控重启| W
@@ -26,7 +27,8 @@ flowchart LR
 | Serena | 代码智能（只读）：read_file / list_dir / find_file / search / symbols | `uv tool install serena-agent` |
 | dsh web | DSH 本体，3080；ChatGPT 派发的任务在这里创建原生会话 | deepseek-harness |
 | dsh-web-watchdog | web 守护：3080+3457 双探针受控重启 | 本仓库 |
-| tunnel-client-keepalive | 隧道守护：3458+3457 双探针自动拉起 | 本仓库 |
+| tunnel-client-keepalive | 隧道守护：3458+3457 双探针自动拉起（tunnel 经 mcp-proxy 3461） | 本仓库 |
+| mcp-proxy | 升级能力层：tunnel 与 daemon 之间的本地 MCP 代理——sessions_get 默认摘要瘦身、sessions_prompt mode=steer 插队（DSH 宿主 API 3080）、50KB 响应守卫；逻辑与 dsh-helm 同源（vendored @ 3c3219d） | 本仓库（`mcp-proxy/`，Node 原生零依赖） |
 
 ## 端口
 
@@ -35,8 +37,11 @@ flowchart LR
 | 3080 | DSH web UI（loopback） | 登录态 |
 | 3457 | helm daemon MCP（`/mcp` + `/healthz`） | `/healthz` 免认证；`/mcp` 需 `Authorization: Bearer <token>`（`~/.agent-chatgpt-helm/token`，daemon 自动生成） |
 | 3458 | tunnel-client 健康端口（`/healthz`） | 免认证 |
+| 3461 | mcp-proxy MCP 入口（`/mcp` + `/healthz`，tunnel 的 server-url 目标） | `/healthz` 免认证；`/mcp` 转发 daemon Bearer token |
 
 ## 数据流
+
+ChatGPT 经隧道发出的 MCP 调用先到 mcp-proxy（3461）：`sessions_get` 默认返回结构化摘要（~KB，缓存 60s）；`sessions_prompt` 带 `mode=steer` 时经 DSH 宿主 API（3080）立即注入运行中回合；所有 `tools/call` 响应超 50KB 统一截断（合法 JSON + `truncated` 元数据）。其余工具原样转发 daemon（3457）。
 
 ```
 ChatGPT 对话
