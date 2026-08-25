@@ -218,7 +218,7 @@ test('MCP proxy：普通工具透传不变形 + 写操作后摘要缓存失效�
   }
 })
 
-test('MCP proxy：模型门禁（无声明拒绝 / 5.5-mini 拒绝 / gpt-5-6-thinking 放行，拒绝不落 daemon）', async () => {
+test('MCP proxy：模型门禁（无声明拒绝 / 5.5-mini 拒绝 / Thinking+Sol 放行，拒绝不落 daemon）', async () => {
   const daemon = await startMockDaemon()
   const host = await startMockHostApi()
   const p = await startProxy({ daemonUrl: `http://127.0.0.1:${daemon.port}/mcp`, hostApiUrl: `http://127.0.0.1:${host.port}` })
@@ -229,7 +229,7 @@ test('MCP proxy：模型门禁（无声明拒绝 / 5.5-mini 拒绝 / gpt-5-6-thi
     assert.equal(noDecl.json.result.isError, true)
     const r1 = JSON.parse(noDecl.json.result.content[0].text)
     assert.equal(r1.code, 'model_declaration_required')
-    assert.equal(r1.required_model, 'gpt-5-6-thinking')
+    assert.equal(r1.required_model, 'gpt-5-6-thinking / gpt-5-6-sol')
     assert.ok(r1.message.startsWith('[模型门禁拒绝]'))
     // 5.5-mini → model_rejected（附 received）
     const mini = await p.rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-x', message: '[model-check] 当前模型是 5.5-mini，列出会话' } } })
@@ -237,15 +237,18 @@ test('MCP proxy：模型门禁（无声明拒绝 / 5.5-mini 拒绝 / gpt-5-6-thi
     const r2 = JSON.parse(mini.json.result.content[0].text)
     assert.equal(r2.code, 'model_rejected')
     assert.equal(r2.received, '5.5-mini')
-    // 放行 → 透传 daemon（sessions_prompt 到达 mock）
-    const ok = await p.rpc({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-x', message: '[model-check] 当前模型是 gpt-5-6-thinking，列出会话' } } })
+    // GPT-5.6 Sol 同样放行 → 透传 daemon
+    const sol = await p.rpc({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-x', message: '[model-check] 当前模型是 gpt-5-6-sol，列出会话' } } })
+    assert.notEqual(sol.json.result.isError, true)
+    // gpt-5-6-thinking 放行 → 透传 daemon
+    const ok = await p.rpc({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-x', message: '[model-check] 当前模型是 gpt-5-6-thinking，列出会话' } } })
     assert.notEqual(ok.json.result.isError, true)
     assert.ok(daemon.calls.includes('sessions_prompt'))
     // 非注入工具不受门禁（sessions_get 无声明照常）
-    const list = await p.rpc({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'sessions_get', arguments: { session_id: 's-x' } } })
+    const list = await p.rpc({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'sessions_get', arguments: { session_id: 's-x' } } })
     assert.notEqual(list.json.result.isError, true)
-    // 被拒调用从未到达 daemon（仅放行那 1 次）
-    assert.equal(daemon.calls.filter((c) => c === 'sessions_prompt').length, 1)
+    // 被拒调用从未到达 daemon（仅 2 次放行：sol + thinking）
+    assert.equal(daemon.calls.filter((c) => c === 'sessions_prompt').length, 2)
   } finally {
     p.close(); host.close(); daemon.close()
   }

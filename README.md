@@ -12,7 +12,7 @@ ChatGPT ── Secure MCP Tunnel ──> tunnel-client (3458) ──> mcp-proxy 
 
 tunnel 与 daemon 之间的本地 MCP 代理（`mcp-proxy/`，Node 原生零依赖），在单机链路提供四类升级能力：
 
-- **模型门禁**：`sessions_create`/`sessions_prompt`（含 `mode=steer`）声明式校验 ChatGPT 模型——隧道协议不带模型信息，由 ChatGPT 侧系统指令在消息第一行声明（模板见 [docs/model-gate.md](docs/model-gate.md)）；`gpt-5-6-thinking` 放行，`5.5-mini`/无声明拒绝并返回 ChatGPT 可读的 `[模型门禁拒绝]` 文案
+- **模型门禁**：`sessions_create`/`sessions_prompt`（含 `mode=steer`）声明式校验 ChatGPT 模型——隧道协议不带模型信息，由 ChatGPT 侧系统指令在消息第一行声明（模板见 [docs/model-gate.md](docs/model-gate.md)）；`gpt-5-6-thinking` / `gpt-5-6-sol` 放行，`5.5-mini`/无声明拒绝并返回 ChatGPT 可读的 `[模型门禁拒绝]` 文案
 - **内容瘦身**：`sessions_get` 默认返回结构化摘要（~KB：current_goal/recent_evidence/history_ref/凭据清洗/60s 缓存），大会话不再整体抛给 ChatGPT；完整历史显式 `include_messages=true` 才取
 - **插队机制**：`sessions_prompt` 带 `mode=steer` 立即注入运行中回合（`steered/queued/rejected/unavailable` 结构化返回），不再干等长任务
 - **响应守卫**：所有 `tools/call` 响应超 50KB 统一截断（合法 JSON + `truncated` 元数据），ChatGPT 侧永不收到超大响应

@@ -7,7 +7,7 @@
 ChatGPT 网页版 → Secure MCP Tunnel → tunnel-client → mcp-proxy 的请求**不带任何模型信息**（OpenAI tunnel 协议无 model 字段，已协议文档 + 实测请求头双重确认）。链路层无法感知调用方模型，因此采用**声明式协议**：
 
 - ChatGPT 侧系统指令约束：每次下发指令时，在**消息第一行**固定声明当前模型名
-- mcp-proxy 在路由前校验声明：`gpt-5-6-thinking`（GPT-5.6 Thinking）放行；`5.5-mini` 拒绝；无声明拒绝
+- mcp-proxy 在路由前校验声明：`gpt-5-6-thinking`（GPT-5.6 Thinking）与 `gpt-5-6-sol`（GPT-5.6 Sol）放行；`5.5-mini` 拒绝；无声明拒绝
 
 ## 被拒响应（ChatGPT 端可见）
 
@@ -46,7 +46,7 @@ ChatGPT 网页版 → Secure MCP Tunnel → tunnel-client → mcp-proxy 的请�
 ```
 
 配置后 ChatGPT 每条消息**自动**带声明，无需手动操作：
-- 网页上选 GPT-5.6 Thinking → 声明 `gpt-5-6-thinking` → 放行
+- 网页上选 GPT-5.6 Thinking / GPT-5.6 Sol → 声明 `gpt-5-6-thinking` / `gpt-5-6-sol` → 放行
 - 网页上选了 5.5-mini（或模型被降级）→ 照实声明 `5.5-mini` → 门禁拒绝，ChatGPT 端直接看到拒绝提示
 
 ## 实现与验证
