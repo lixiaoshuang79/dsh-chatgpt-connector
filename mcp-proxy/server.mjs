@@ -4,7 +4,9 @@
  *
  * 拓扑：ChatGPT ── Tunnel ──> tunnel-client ──> mcp-proxy (3461/mcp) ──> helm daemon (3457) ──> DSH web (3080)
  *
- * 在 tunnel 与 daemon 之间加一层轻量代理，为单机链路提供三项升级能力：
+ * 在 tunnel 与 daemon 之间加一层轻量代理，为单机链路提供四类升级能力：
+ *  - 模型门禁：sessions_create/sessions_prompt 声明式校验 ChatGPT 模型
+ *    （lib/model-gate.mjs；隧道协议无 model 字段，消息第一行声明）
  *  - 内容瘦身：sessions_get 默认返回结构化摘要（lib/summary.mjs）
  *  - 插队机制：sessions_prompt mode=steer 经 DSH 宿主 API 注入运行中回合（lib/steer.mjs）
  *  - 响应守卫：所有 tools/call 响应过 MAX_RESPONSE_BYTES 截断（lib/guard.mjs）
@@ -18,6 +20,7 @@ import { createServer } from 'node:http'
 import { DaemonClient, DEFAULT_DAEMON_URL } from './lib/daemon.mjs'
 import { SessionSummaryService } from './lib/summary.mjs'
 import { steerPrompt } from './lib/steer.mjs'
+import { checkModelDeclaration, rejectionText, gateMessageArg } from './lib/model-gate.mjs'
 import { applyGuard, MAX_RESPONSE_BYTES } from './lib/guard.mjs'
 
 export const DEFAULT_PORT = 3461
@@ -56,8 +59,18 @@ export class McpProxy {
     this.logFn(line)
   }
 
-  /** tools/call 处理：升级能力拦截 + 透传 + 统一守卫。 */
+  /** tools/call 处理：门禁 + 升级能力拦截 + 透传 + 统一守卫。 */
   async handleToolCall(name, args) {
+    // ⓪ 模型门禁：声明式校验（隧道协议无模型字段，ChatGPT 侧系统指令在
+    //    消息第一行声明当前模型；被拒 → isError + 结构化 JSON，ChatGPT 可读）
+    const gateMessage = gateMessageArg(name, args)
+    if (gateMessage && typeof gateMessage === 'string' && gateMessage.trim()) {
+      const gate = checkModelDeclaration(gateMessage)
+      if (!gate.ok) {
+        this.log(`model gate ${gate.code} on ${name}`)
+        return { content: [{ type: 'text', text: rejectionText(gate) }], isError: true }
+      }
+    }
     // ① 内容瘦身：sessions_get 默认摘要（include_messages=true 走完整历史）
     if (name === 'sessions_get') {
       const payload = await this.summaries.getSession(args ?? {})

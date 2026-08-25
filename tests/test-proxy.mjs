@@ -165,7 +165,7 @@ test('MCP proxy：插队（mode=steer 经宿主 API 注入，session_was_running
   const p = await startProxy({ daemonUrl: `http://127.0.0.1:${daemon.port}/mcp`, hostApiUrl: `http://127.0.0.1:${host.port}` })
   try {
     await p.rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
-    const res = await p.rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-run', message: '先跑 lint 再提交', mode: 'steer' } } })
+    const res = await p.rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-run', message: '[model-check] 当前模型是 gpt-5-6-thinking，先跑 lint 再提交', mode: 'steer' } } })
     const out = JSON.parse(res.json.result.content[0].text)
     assert.equal(out.status, 'steered')
     assert.equal(out.session_was_running, true)
@@ -183,11 +183,11 @@ test('MCP proxy：插队降级（宿主 API 不可达 → unavailable，不崩�
   const p = await startProxy({ daemonUrl: `http://127.0.0.1:${daemon.port}/mcp`, hostApiUrl: `http://127.0.0.1:${host.port}` })
   try {
     await p.rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
-    const steer = await p.rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-run', message: '先跑 lint', mode: 'steer' } } })
+    const steer = await p.rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-run', message: '[model-check] 当前模型是 gpt-5-6-thinking，先跑 lint', mode: 'steer' } } })
     const out = JSON.parse(steer.json.result.content[0].text)
     assert.equal(out.status, 'unavailable')
     // queue 路径（无 mode）照常走 daemon
-    const queued = await p.rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-run', message: '继续' } } })
+    const queued = await p.rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-run', message: '[model-check] 当前模型是 gpt-5-6-thinking，继续' } } })
     assert.ok(String(queued.json.result.content[0].text).length > 0)
     assert.ok(daemon.calls.includes('sessions_prompt'))
   } finally {
@@ -210,9 +210,42 @@ test('MCP proxy：普通工具透传不变形 + 写操作后摘要缓存失效�
     await p.rpc({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'sessions_get', arguments: { session_id: 's-big' } } })
     assert.equal(daemon.calls.filter((c) => c === 'sessions_get').length, before + 1, '缓存命中：第二次不调 daemon')
     // 写操作（sessions_prompt queue）→ 摘要失效 → 再取重建
-    await p.rpc({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-big', message: '继续' } } })
+    await p.rpc({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-big', message: '[model-check] 当前模型是 gpt-5-6-thinking，继续' } } })
     await p.rpc({ jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'sessions_get', arguments: { session_id: 's-big' } } })
     assert.equal(daemon.calls.filter((c) => c === 'sessions_get').length, before + 2, '写操作后摘要重建')
+  } finally {
+    p.close(); host.close(); daemon.close()
+  }
+})
+
+test('MCP proxy：模型门禁（无声明拒绝 / 5.5-mini 拒绝 / gpt-5-6-thinking 放行，拒绝不落 daemon）', async () => {
+  const daemon = await startMockDaemon()
+  const host = await startMockHostApi()
+  const p = await startProxy({ daemonUrl: `http://127.0.0.1:${daemon.port}/mcp`, hostApiUrl: `http://127.0.0.1:${host.port}` })
+  try {
+    await p.rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
+    // 无声明 → model_declaration_required（isError，不落 daemon）
+    const noDecl = await p.rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-x', message: '列出所有会话' } } })
+    assert.equal(noDecl.json.result.isError, true)
+    const r1 = JSON.parse(noDecl.json.result.content[0].text)
+    assert.equal(r1.code, 'model_declaration_required')
+    assert.equal(r1.required_model, 'gpt-5-6-thinking')
+    assert.ok(r1.message.startsWith('[模型门禁拒绝]'))
+    // 5.5-mini → model_rejected（附 received）
+    const mini = await p.rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-x', message: '[model-check] 当前模型是 5.5-mini，列出会话' } } })
+    assert.equal(mini.json.result.isError, true)
+    const r2 = JSON.parse(mini.json.result.content[0].text)
+    assert.equal(r2.code, 'model_rejected')
+    assert.equal(r2.received, '5.5-mini')
+    // 放行 → 透传 daemon（sessions_prompt 到达 mock）
+    const ok = await p.rpc({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'sessions_prompt', arguments: { session_id: 's-x', message: '[model-check] 当前模型是 gpt-5-6-thinking，列出会话' } } })
+    assert.notEqual(ok.json.result.isError, true)
+    assert.ok(daemon.calls.includes('sessions_prompt'))
+    // 非注入工具不受门禁（sessions_get 无声明照常）
+    const list = await p.rpc({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'sessions_get', arguments: { session_id: 's-x' } } })
+    assert.notEqual(list.json.result.isError, true)
+    // 被拒调用从未到达 daemon（仅放行那 1 次）
+    assert.equal(daemon.calls.filter((c) => c === 'sessions_prompt').length, 1)
   } finally {
     p.close(); host.close(); daemon.close()
   }

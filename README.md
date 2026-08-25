@@ -10,13 +10,25 @@ ChatGPT ── Secure MCP Tunnel ──> tunnel-client (3458) ──> mcp-proxy 
 
 ## 升级能力（mcp-proxy，单机也有）
 
-tunnel 与 daemon 之间的本地 MCP 代理（`mcp-proxy/`，Node 原生零依赖），在单机链路提供三项升级能力：
+tunnel 与 daemon 之间的本地 MCP 代理（`mcp-proxy/`，Node 原生零依赖），在单机链路提供四类升级能力：
 
+- **模型门禁**：`sessions_create`/`sessions_prompt`（含 `mode=steer`）声明式校验 ChatGPT 模型——隧道协议不带模型信息，由 ChatGPT 侧系统指令在消息第一行声明（模板见 [docs/model-gate.md](docs/model-gate.md)）；`gpt-5-6-thinking` 放行，`5.5-mini`/无声明拒绝并返回 ChatGPT 可读的 `[模型门禁拒绝]` 文案
 - **内容瘦身**：`sessions_get` 默认返回结构化摘要（~KB：current_goal/recent_evidence/history_ref/凭据清洗/60s 缓存），大会话不再整体抛给 ChatGPT；完整历史显式 `include_messages=true` 才取
 - **插队机制**：`sessions_prompt` 带 `mode=steer` 立即注入运行中回合（`steered/queued/rejected/unavailable` 结构化返回），不再干等长任务
 - **响应守卫**：所有 `tools/call` 响应超 50KB 统一截断（合法 JSON + `truncated` 元数据），ChatGPT 侧永不收到超大响应
 
-**ChatGPT 侧零改动**：tunnel_id/连接器/App 全部不变，`install.sh` 自动把 tunnel 指向代理（3461）——摘要瘦身与响应守卫对对话透明生效；插队（`mode=steer`）对运行中会话显式触发（curl 示例见 [docs/connector-creation.md](docs/connector-creation.md) 升级节）。想临时绕过：keepalive 环境变量 `HELM_MCP_PORT` 改回 `3457`。测试：`tests/test-proxy.mjs`（node:test 全链路）。
+**ChatGPT 侧零改动**：tunnel_id/连接器/App 全部不变，`install.sh` 自动把 tunnel 指向代理（3461）——模型门禁、摘要瘦身与响应守卫对对话透明生效；插队（`mode=steer`）对运行中会话显式触发（curl 示例见 [docs/connector-creation.md](docs/connector-creation.md) 升级节）。想临时绕过：keepalive 环境变量 `HELM_MCP_PORT` 改回 `3457`。测试：`tests/test-proxy.mjs`（node:test 全链路 7 用例，含模型门禁）。
+
+### Goal 守卫（ChatGPT 指令禁止在 DSH 开启 goal）
+
+ChatGPT 指令经插件注入 DSH 时会伪装成本人消息，可被用来开启 goal（回合结束自动续跑、不听指挥）。本仓库提供幂等补丁脚本 `patches/goal-guard.mjs`（DSH 插件 `@beforewave/dsh-chatgpt-helm` + 核心 `dsh-tool-goal`，v2：消息以 `relayedBy:"dsh-chatgpt-helm"` 注入保持 GUI 可见，goal 权威校验排除该标记）：
+
+```bash
+node patches/goal-guard.mjs        # 幂等，自动备份；插件重装/DSH 升级后重跑
+launchctl kickstart -k gui/$(id -u)/com.ashuang.dsh-web-local   # 重启 web 生效
+```
+
+副作用：ChatGPT 侧无法对 goal 做 edit/pause/resume，恢复 goal 只能走本机 GUI。详见 [docs/goal-guard.md](docs/goal-guard.md)。
 
 ## 适用场景
 

@@ -2,7 +2,22 @@
 
 本仓库遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/) 语义化版本（[SemVer](https://semver.org/lang/zh-CN/)）。
 
+## [0.3.0] - 2026-08-25
+
+### Added
+
+- **模型门禁（mcp-proxy）**：`sessions_create`/`sessions_prompt`（含 `mode=steer`）声明式校验 ChatGPT 模型——隧道协议无 model 字段（实测确认），由 ChatGPT 侧系统指令在消息第一行声明（模板见 [docs/model-gate.md](docs/model-gate.md)）：
+  - `gpt-5-6-thinking` 放行；`5.5-mini` 拒绝（`model_rejected` 附 received）；无声明拒绝（`model_declaration_required`）
+  - 被拒 = MCP `isError` + `[模型门禁拒绝]` 结构化 JSON 文案（ChatGPT 端工具错误可见），含模型声明格式与重发指引
+  - `mcp-proxy/lib/model-gate.mjs`（零依赖，与 dsh-helm hub 侧同源实现），`tests/test-proxy.mjs` 新增门禁用例（7 用例全过）
+- **Goal 守卫（patches/goal-guard.mjs + docs/goal-guard.md）**：ChatGPT 指令禁止在 DSH 开启 goal（消息以 `relayedBy:"dsh-chatgpt-helm"` 注入保持 GUI 可见 + goal 权威校验排除该标记），幂等补丁、自动备份，与 dsh-helm 同源
+
+### Changed / Fixed
+
+- 既有测试用例的注入消息补模型声明前缀（适配门禁契约）
+
 ## [0.2.0] - 2026-08-24
+
 
 ### Added
 
