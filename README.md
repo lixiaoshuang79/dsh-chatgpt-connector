@@ -16,7 +16,7 @@ tunnel 与 daemon 之间的本地 MCP 代理（`mcp-proxy/`，Node 原生零依�
 - **插队机制**：`sessions_prompt` 带 `mode=steer` 立即注入运行中回合（`steered/queued/rejected/unavailable` 结构化返回），不再干等长任务
 - **响应守卫**：所有 `tools/call` 响应超 50KB 统一截断（合法 JSON + `truncated` 元数据），ChatGPT 侧永不收到超大响应
 
-`install.sh` 自动安装代理服务并让 tunnel 走代理（3461）；想临时绕过：keepalive 环境变量 `HELM_MCP_PORT` 改回 `3457`。测试：`tests/test-proxy.mjs`（node:test 全链路）。
+**ChatGPT 侧零改动**：tunnel_id/连接器/App 全部不变，`install.sh` 自动把 tunnel 指向代理（3461）——摘要瘦身与响应守卫对对话透明生效；插队（`mode=steer`）对运行中会话显式触发（curl 示例见 [docs/connector-creation.md](docs/connector-creation.md) 升级节）。想临时绕过：keepalive 环境变量 `HELM_MCP_PORT` 改回 `3457`。测试：`tests/test-proxy.mjs`（node:test 全链路）。
 
 ## 适用场景
 

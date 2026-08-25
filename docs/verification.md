@@ -14,10 +14,11 @@
 ==== dsh-chatgpt-connector 验证 ====
   ✓ DSH web UI (3080)
   ✓ helm daemon MCP (3457 /healthz)
+  ✓ mcp-proxy (3461 /healthz)
   ✓ tunnel-client (3458 /healthz)
   ✓ supervisor_health 返回 ok
   ✓ 工具清单 19 个（≥19）
-结果: 5 通过, 0 失败
+结果: 6 通过, 0 失败
 ```
 
 ## 手动验证
@@ -27,10 +28,12 @@
 lsof -nP -iTCP:3080 -sTCP:LISTEN   # web
 lsof -nP -iTCP:3457 -sTCP:LISTEN   # helm daemon
 lsof -nP -iTCP:3458 -sTCP:LISTEN   # tunnel-client
+lsof -nP -iTCP:3461 -sTCP:LISTEN   # mcp-proxy（升级能力层）
 
 # 健康端点（3457/3458 的 /healthz 免认证）
 curl -s http://127.0.0.1:3457/healthz   # {"status":"ok"}
 curl -s http://127.0.0.1:3458/healthz   # ok
+curl -s http://127.0.0.1:3461/healthz   # {"ok":true,...}（mcp-proxy）
 
 # supervisor_health（需要 token）
 TOKEN=$(cat ~/.agent-chatgpt-helm/token)
@@ -68,13 +71,30 @@ launchctl list | grep -E 'dsh-web-watchdog|tunnel-client-keepalive'
 2. 提问「列出你能用的工具」或直接给任务（如「读一下 <项目>/README.md 并总结」）。
 3. 应看到工具调用卡片与结果。任务会创建 DSH 原生会话，可在本机 3080 的会话列表看到并接管。
 
+升级能力（v0.2.0，mcp-proxy）端到端确认：
+
+```bash
+# ① 摘要瘦身：sessions_get 默认返回摘要（无 messages 字段，~KB）——ChatGPT 侧自动生效
+curl -s -H 'Content-Type: application/json' -X POST http://127.0.0.1:3461/mcp \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sessions_get","arguments":{"session_id":"<会话id>"}}}' \
+  | python3 -c 'import json,sys; d=json.load(sys.stdin)["result"]["content"][0]["text"]; print(len(d), "bytes;", "keys:", list(json.loads(d).keys())[:8])'
+
+# ② 插队：mode=steer 立即注入运行中回合（返回 status=steered）
+curl -s -H 'Content-Type: application/json' -X POST http://127.0.0.1:3461/mcp \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sessions_prompt","arguments":{"session_id":"<会话id>","message":"先跑 lint 再提交","mode":"steer"}}}'
+
+# ③ 守卫日志：超 50KB 响应截断记录在
+tail -50 ~/.dsh/logs/mcp-proxy.out   # [mcp-guard] <tool> original=NNNNN returned=NNNNN truncated
+```
+
 ## 故障时的信息收集
 
 ```bash
-# 三个日志
+# 四个日志
 tail -50 ~/.dsh/logs/dsh-web-watchdog.log
 tail -50 ~/.dsh/logs/tunnel-client-keepalive.log
 tail -50 ~/.dsh/logs/tunnel-client-manual.log
+tail -50 ~/.dsh/logs/mcp-proxy.out     # mcp-proxy（摘要缓存/guard 截断/steer 插队）
 # 三个端口
 lsof -nP -iTCP:3080 -sTCP:LISTEN; lsof -nP -iTCP:3457 -sTCP:LISTEN; lsof -nP -iTCP:3458 -sTCP:LISTEN
 # 凭据是否到位（只看键名，勿打印值）

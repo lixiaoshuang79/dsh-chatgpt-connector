@@ -77,6 +77,52 @@ curl -s http://127.0.0.1:3458/healthz
 
 ---
 
+## 升级后：ChatGPT 侧配置（v0.2.0 mcp-proxy）
+
+> 一句话结论：**ChatGPT/OpenAI 侧零改动**。升级（`./scripts/install.sh`）只动本机——
+> tunnel_id、连接器、App 全部不变，`install.sh` 自动把 tunnel 的 server-url
+> 从 daemon(3457) 切到 mcp-proxy(3461)。新部署走本流程也无需任何额外步骤。
+
+链路变化（对 ChatGPT 透明）：
+
+```
+升级前：ChatGPT → tunnel(3458) → helm daemon(3457)
+升级后：ChatGPT → tunnel(3458) → mcp-proxy(3461) → helm daemon(3457)
+```
+
+### 自动生效（无需配置）
+
+| 能力 | 触发 | ChatGPT 侧可见效果 |
+|---|---|---|
+| 内容瘦身 | `sessions_get` 默认返回结构化摘要 | 大会话不再整体抛给模型（~KB 摘要：current_goal/最近证据/凭据已清洗） |
+| 响应守卫 | 任何工具响应 >50KB | 统一截断为合法 JSON（`truncated` 元数据），对话不会因超大响应卡住 |
+
+### 插队机制（显式触发）
+
+ChatGPT 对话发出的消息不带 `mode=steer`（走 daemon 原生排队语义，与升级前一致）；
+要**立即打断运行中的 DSH 会话**，带 `mode=steer` 调用即可，代理自动接管：
+
+```bash
+# 会话 id 从 3080 会话列表（或 sessions_list）拿
+curl -s -H 'Content-Type: application/json' -X POST http://127.0.0.1:3461/mcp \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"sessions_prompt","arguments":{"session_id":"<会话id>","message":"先跑 lint 再提交","mode":"steer"}}}'
+```
+
+返回 `{"status":"steered",...}`=已注入运行中回合；`queued`=排队；
+`rejected`=DSH 拒绝（带 code）；`unavailable`=宿主 API 不可达（链路断，queue 照常）。
+
+### 验证升级生效
+
+```bash
+./scripts/verify.sh          # 多一行：✓ mcp-proxy (3461 /healthz)
+tail -5 ~/.dsh/logs/mcp-proxy.out   # 启动日志：MCP proxy listening on 127.0.0.1:3461/mcp
+```
+
+### 临时绕过代理
+
+把 `~/Library/LaunchAgents/com.dsh-connector.tunnel-client-keepalive.plist` 里的
+`HELM_MCP_PORT` 改回 `3457`，重启 keepalive（`launchctl kickstart -k gui/$(id -u)/com.dsh-connector.tunnel-client-keepalive`）。
+
 ## 踩坑记录
 
 | 现象 | 原因 | 解法 |

@@ -148,6 +148,45 @@ div[contenteditable=true][aria-label="Chat with ChatGPT"]
 
 ---
 
+## 5. mcp-proxy 相关（v0.2.0 升级能力层）
+
+### 5.1 3461 不通 / ChatGPT 工具全报错
+
+链路：tunnel(3458) → mcp-proxy(3461) → daemon(3457)，代理挂则全部工具失败。
+
+```bash
+curl -s --max-time 3 http://127.0.0.1:3461/healthz        # 代理是否活
+launchctl list | grep com.dsh-connector.mcp-proxy          # 守护是否在
+tail -30 ~/.dsh/logs/mcp-proxy.err                         # 代理崩溃原因
+```
+
+代理由 launchd KeepAlive 自动拉起；`install.sh` 重跑可修复 plist。**临时绕过**：
+keepalive plist 的 `HELM_MCP_PORT` 改回 `3457` 并 kickstart（见 connector-creation.md 升级节）。
+
+### 5.2 daemon 挂但代理活着（keepalive 显示健康）
+
+keepalive 的 upstream 探针走 `HELM_UPSTREAM_PORT`（默认 3457，直探真实 daemon），
+不会因代理存活误判健康；此时工具调用返回结构化错误（`daemon mcp unreachable`），
+对话里表现为工具失败——先修 daemon（web 侧），无需动代理。
+
+### 5.3 摘要缓存没更新 / 对话里信息陈旧
+
+摘要缓存 60s TTL，写操作（prompt/resume/cancel）后自动失效。仍旧：
+删 `~/.dsh/connector/summaries/<session_id>.json` 或等 60s 自动过期。
+想强制取完整历史：`sessions_get` 带 `include_messages:true`（max_messages 默认 20，上限 100）。
+
+### 5.4 怀疑守卫截断了响应
+
+```bash
+grep 'mcp-guard' ~/.dsh/logs/mcp-proxy.out   # original= 与 returned= 两个数字
+```
+被截断的响应仍合法 JSON（`truncated` 元数据标记），ChatGPT 侧不会解析失败。
+
+### 5.5 steer 插队不生效
+
+`status=rejected`（带 code）→ DSH 明确拒绝，看 reason（如 steer-unavailable=窗口关闭）；
+`status=unavailable` → DSH 宿主 API(3080) 不可达——检查 web 是否在跑、`host_api` 是否被改。
+
 ## 附录：信息收集模板
 
 报障时附上：
