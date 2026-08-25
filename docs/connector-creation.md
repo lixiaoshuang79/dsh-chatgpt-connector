@@ -21,7 +21,7 @@ OpenAI Platform（https://platform.openai.com/settings/organization/tunnels）
 ### 1. 创建 Tunnel
 
 1. 打开 [OpenAI Platform → Tunnels](https://platform.openai.com/settings/organization/tunnels)。
-2. **Create Tunnel**，填写名称（建议 `dsh-helm-<机器名>`），创建后得到 `tunnel_xxxxxxxx...`（`tunnel_` + 32 位 hex）。
+2. **Create Tunnel**，填写名称（建议 `dsh-connector-<机器名>`），创建后得到 `tunnel_xxxxxxxx...`（`tunnel_` + 32 位 hex）。
 3. 平台提供 **tunnel-client** 下载；也可用官方发行渠道：
    - GitHub Releases：<https://github.com/openai/tunnel-client/releases/latest>（v0.0.12+，含 macOS arm64）
    - Homebrew：`brew install openai/tools/tunnel-client`
@@ -61,7 +61,7 @@ curl -s http://127.0.0.1:3458/healthz
 3. **Create app**：
    - 类型选 **Tunnel**
    - 选你刚建的 Tunnel
-   - 填 App 名称（如 `dsh-helm-<你的标识>`）
+   - 填 App 名称（如 `dsh-connector-<你的标识>`）
    - Auth 选 **No Authentication**（官方选项：OAuth / No Authentication / Mixed）
    - 勾选风险确认（大意：此 app 可访问你的文件/代码，风险自担）
    - **Create**

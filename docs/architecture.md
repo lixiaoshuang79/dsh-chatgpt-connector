@@ -28,7 +28,7 @@ flowchart LR
 | dsh web | DSH 本体，3080；ChatGPT 派发的任务在这里创建原生会话 | deepseek-harness |
 | dsh-web-watchdog | web 守护：3080+3457 双探针受控重启 | 本仓库 |
 | tunnel-client-keepalive | 隧道守护：3458+3457 双探针自动拉起（tunnel 经 mcp-proxy 3461） | 本仓库 |
-| mcp-proxy | 升级能力层：tunnel 与 daemon 之间的本地 MCP 代理——sessions_get 默认摘要瘦身、sessions_prompt mode=steer 插队（DSH 宿主 API 3080）、50KB 响应守卫；逻辑与 dsh-helm 同源（vendored @ 3c3219d） | 本仓库（`mcp-proxy/`，Node 原生零依赖） |
+| mcp-proxy | 升级能力层：tunnel 与 daemon 之间的本地 MCP 代理——sessions_get 默认摘要瘦身、sessions_prompt mode=steer 插队（DSH 宿主 API 3080）、50KB 响应守卫 | 本仓库（`mcp-proxy/`，Node 原生零依赖） |
 
 ## 端口
 

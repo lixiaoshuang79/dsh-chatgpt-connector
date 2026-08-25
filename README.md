@@ -10,7 +10,7 @@ ChatGPT ── Secure MCP Tunnel ──> tunnel-client (3458) ──> mcp-proxy 
 
 ## 升级能力（mcp-proxy，单机也有）
 
-tunnel 与 daemon 之间的本地 MCP 代理（`mcp-proxy/`，Node 原生零依赖），把 dsh-helm 控制平面的升级能力带到单机链路（逻辑同源 vendored）：
+tunnel 与 daemon 之间的本地 MCP 代理（`mcp-proxy/`，Node 原生零依赖），在单机链路提供三项升级能力：
 
 - **内容瘦身**：`sessions_get` 默认返回结构化摘要（~KB：current_goal/recent_evidence/history_ref/凭据清洗/60s 缓存），大会话不再整体抛给 ChatGPT；完整历史显式 `include_messages=true` 才取
 - **插队机制**：`sessions_prompt` 带 `mode=steer` 立即注入运行中回合（`steered/queued/rejected/unavailable` 结构化返回），不再干等长任务
