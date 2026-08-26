@@ -30,6 +30,17 @@ launchctl kickstart -k gui/$(id -u)/com.ashuang.dsh-web-local   # 重启 web 生
 
 副作用：ChatGPT 侧无法对 goal 做 edit/pause/resume，恢复 goal 只能走本机 GUI。详见 [docs/goal-guard.md](docs/goal-guard.md)。
 
+### Serena 工作区实时生效（workspace-refresh）
+
+daemon 的 `code_use_workspace` 原只在 adapter 连接时同步一次 DSH 工作区（ProjectRegistry 快照），之后在 DSH 侧新注册的工作区对 Serena `code_*` 工具永远不可见（`workspaces_list` 可见但 `code_use_workspace` 报 `not registered/authorized`）。补丁 `patches/workspace-refresh.mjs` 让 `resolve` 失败时回退 adapter 实时列表并补注册——**新增/删除工作区即时生效，无需重启**：
+
+```bash
+node patches/workspace-refresh.mjs   # 幂等，自动备份，语法校验失败自动回滚
+launchctl kickstart -k gui/$(id -u)/com.dsh-connector.dsh-web-watchdog   # 重启 web 生效
+```
+
+ChatGPT 经 daemon `sessions_list` 本就可见 DSH 全部持久化会话（默认最新 50 个，limit 可到 100），与会话归属的 workspace 注册无关；workspace 注册只影响 Serena 代码智能工具的可激活范围。详见 [docs/workspace-refresh.md](docs/workspace-refresh.md)。
+
 ## 适用场景
 
 - 想在一台电脑上用 ChatGPT 控制本机 DSH 的用户

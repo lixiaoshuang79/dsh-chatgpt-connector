@@ -46,7 +46,7 @@ PID_FILE="${WATCH_PID_FILE:-$HOME/.dsh/.dsh-web-watchdog.pid}"
 # 测试可覆盖 node 可执行文件（默认 harness 自带 node22）
 NODE_BIN="${WATCH_NODE_BIN:-$HARNESS_DIR/.tools/node22/bin/node}"
 
-export PATH="$HARNESS_DIR/.tools/node22/bin:/usr/local/bin:$HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="$HARNESS_DIR/.tools/node22/bin:/usr/local/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # 从私有凭据文件注入 ChatGPT Helm 隧道环境变量（文件不入库，脚本本身不含密钥值）
 CRED_FILE="$HOME/.dsh/.credentials.yaml"
@@ -127,7 +127,7 @@ is_dsh() {
   [ -z "$pid" ] && return 1
   cmd=$(ps -ww -p "$pid" -o command= 2>/dev/null)
   case "$cmd" in
-    *"bin.ts web"*|*"dsh web"*|*" --profile web "*) return 0 ;;
+    *"bin.ts web"*|*"dsh web"*|*"dsh-real web"*|*" --profile web "*) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -262,14 +262,40 @@ cleanup_orphan_daemon() {
   fi
 }
 
-# 拉起 dsh web（带完整 env），等待 3080 + 3457 双就绪
+# 拉起 dsh web（带完整 env），等待 3080 + 3457 双就绪。
+# 支持两种安装形态：
+#   A. deepseek-harness checkout：$HARNESS_DIR/apps/cli/src/bin.ts web
+#   B. npm 全局 dsh（本机无 checkout）：$NODE_BIN $HOME/.local/bin/dsh-real web
+#      （dsh-real 是真实 node 入口；dsh 是 bash 包装，会复用已跑实例，不可用）
 launch_web() {
-  if [ ! -x "$NODE_BIN" ]; then
-    log "✗ node 二进制不存在: ${NODE_BIN}（web 无法拉起，请确认 DSH_HARNESS_DIR 正确）"
-    return 1
+  local launch_cmd web_cmd
+  if [ -f "$HARNESS_DIR/apps/cli/src/bin.ts" ]; then
+    # A. checkout 模式
+    if [ ! -x "$NODE_BIN" ]; then
+      log "✗ node 二进制不存在: ${NODE_BIN}（web 无法拉起，请确认 DSH_HARNESS_DIR 正确）"
+      return 1
+    fi
+    web_cmd=( "$NODE_BIN" --import tsx/esm apps/cli/src/bin.ts web --no-open )
+  else
+    # B. npm 全局 dsh 模式
+    if [ ! -x "$NODE_BIN" ]; then
+      NODE_BIN="$(command -v node 2>/dev/null || true)"
+      [ -n "$NODE_BIN" ] || NODE_BIN="/opt/homebrew/bin/node"
+    fi
+    if [ ! -x "$NODE_BIN" ]; then
+      log "✗ node 二进制不存在（web 无法拉起，请确认 node 已安装或 WATCH_NODE_BIN 正确）"
+      return 1
+    fi
+    local DSH_REAL="$HOME/.local/bin/dsh-real"
+    [ -x "$DSH_REAL" ] || DSH_REAL="$(command -v dsh-real 2>/dev/null || true)"
+    if [ -z "$DSH_REAL" ]; then
+      log "✗ dsh-real 不在 PATH（npm 全局模式需要 dsh CLI，web 无法拉起）"
+      return 1
+    fi
+    web_cmd=( "$NODE_BIN" "$DSH_REAL" web --no-open --port "$WEB_PORT" )
   fi
-  log "拉起 dsh web（cwd=${HARNESS_DIR}）"
-  ( cd "$HARNESS_DIR" && nohup "$NODE_BIN" --import tsx/esm apps/cli/src/bin.ts web --no-open \
+  log "拉起 dsh web（cwd=${HARNESS_DIR}，$([ -f "$HARNESS_DIR/apps/cli/src/bin.ts" ] && echo checkout 模式 || echo npm 全局 dsh 模式)）"
+  ( cd "$HARNESS_DIR" && nohup "${web_cmd[@]}" \
       >> "$LOG_DIR/dsh-web-watchdog-launch.log" 2>&1 & )
   local sec=0
   while [ "$sec" -lt 40 ]; do
