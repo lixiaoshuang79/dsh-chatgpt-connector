@@ -44,7 +44,7 @@ export class DaemonClient {
   }
 
   async post(body) {
-    const headers = { 'content-type': 'application/json' }
+    const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' }
     if (this.token) headers.authorization = `Bearer ${this.token}`
     if (this.sessionId) headers['mcp-session-id'] = this.sessionId
     const ac = new AbortController()

@@ -25,7 +25,7 @@ import { applyGuard, MAX_RESPONSE_BYTES } from './lib/guard.mjs'
 
 export const DEFAULT_PORT = 3461
 export const DEFAULT_HOST_API_URL = 'http://127.0.0.1:3080'
-export const PROXY_VERSION = '0.2.0'
+export const PROXY_VERSION = '0.3.0'
 
 const WRITE_TOOLS = new Set(['sessions_prompt', 'sessions_resume', 'sessions_cancel'])
 
