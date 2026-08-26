@@ -1,23 +1,22 @@
 #!/usr/bin/env node
 /**
- * workspace-refresh patch —— 修复 daemon ProjectRegistry 启动快照缺陷
+ * workspace-refresh patch v2 —— code_use_workspace 全开放（用户授权所有工作区）
  *
  * 背景（2026-08-26 实测定位）：agent-chatgpt-helm daemon 的 code_use_workspace
- * 走 projects registry（ProjectRegistry）校验，而该 registry 只在
- * onRegister（adapter 建立连接）时从 adapter.listWorkspaces() 同步一次、
- * onDisconnect 时整体移除——**之后在 DSH 侧新注册的 workspace 永远不会
- * 进入它**。症状：workspaces_list（动态读 adapter）能列出新工作区，但
- * code_use_workspace 仍抛 `project is not registered/authorized`。
- * ChatGPT 在任何新项目上都无法启用 Serena 代码智能，必须先重启 web。
+ * 走 projects registry（ProjectRegistry）校验，该 registry 只在 onRegister
+ * （adapter 建立连接）时同步一次 adapter.listWorkspaces()、断开时整体移除。
  *
- * 修复：code_use_workspace 的 projects.resolve 失败时，回退到 adapter 实时
- * listWorkspaces()（动态反映 DSH workspaceRegistry），匹配到即激活并顺手
- * registerWorkspace 补进 ProjectRegistry——此后同一路径直接 resolve 成功，
- * 以后新增工作区无需重启即对 code_* 工具生效。
+ * v1：projects.resolve 失败 → 回退 adapter 实时 listWorkspaces（动态反映 DSH
+ * workspaceRegistry），匹配即补注册。解决了"新注册工作区不可见"，但路径仍须
+ * 预先注册到 DSH workspaceRegistry。
  *
- * 幂等：检测到新逻辑已存在则退出 0；应用前自动备份 .bak-workspacerefresh-<ts>。
- * 应用后需重启 DSH web（launchctl kickstart -k gui/$(id -u)/com.dsh-connector.dsh-web-watchdog
- * 或由 watchdog 兜底）才生效。插件重装/升级后重跑本脚本即可。
+ * v2（本版，用户 2026-08-26 授权"开放所有工作区权限"）：resolve 失败且实时
+ * 列表也匹配不到时，**直接把传入路径注册并激活**——任意绝对路径都能启用
+ * Serena 代码智能，不再要求预先注册。敏感目录可读风险由授权人承担。
+ *
+ * 幂等：v2 标记存在则退出 0；兼容已打 v1 / 未打补丁两态（自动替换为 v2）。
+ * 应用前自动备份 .bak-workspacerefresh-<ts>；语法校验失败自动回滚。
+ * 应用后需重启 DSH web 生效；插件重装/升级后重跑本脚本即可。
  *
  * 用法：node patches/workspace-refresh.mjs [--plugin <lib/index.js 路径>]
  */
@@ -34,16 +33,19 @@ const argOf = (flag) => {
 const target =
   argOf('--plugin') ?? join(HOME, '.dsh/profiles/web/node_modules/@beforewave/agent-chatgpt-helm/lib/index.js')
 
-// 原实现：projects registry 一次性校验，失败即抛（新注册 workspace 永远不可达）
-const OLD =
+// 原版（未打补丁）：仅 ProjectRegistry 快照校验，失败即抛
+const ORIGINAL =
   'if(o.projects)u=o.projects.resolve(l);else{let E=(await Dt(o,i).listWorkspaces()).filter(P=>P.id===l||P.path===l||P.title===l);if(!E.length)throw new Error(`workspace is not registered/authorized: ${l}`);if(E.length>1)throw new Error(`workspace reference is ambiguous; use workspace id or full path: ${l}`);u=E[0]}'
 
-// 新实现：resolve 失败 → 回退 adapter 实时列表（动态反映 DSH workspaceRegistry），
-// 匹配到即补注册进 ProjectRegistry（sources=adapter id），后续直接命中。
-const NEW =
+// v1（上一版）：resolve 失败 → 回退实时列表，匹配即补注册；仍要求预先注册
+const V1 =
   'if(o.projects){try{u=o.projects.resolve(l)}catch(z){let E=(await Dt(o,i).listWorkspaces()).filter(P=>P.id===l||P.path===l||P.title===l);if(!E.length)throw z;if(E.length>1)throw new Error(`workspace reference is ambiguous; use workspace id or full path: ${l}`);u=E[0];o.projects.registerWorkspace(u,Dt(o,i).id)}}else{let E=(await Dt(o,i).listWorkspaces()).filter(P=>P.id===l||P.path===l||P.title===l);if(!E.length)throw new Error(`workspace is not registered/authorized: ${l}`);if(E.length>1)throw new Error(`workspace reference is ambiguous; use workspace id or full path: ${l}`);u=E[0]}'
 
-const IDEMPOTENT_MARK = 'o.projects.registerWorkspace(u,Dt(o,i).id)'
+// v2（本版）：resolve 失败 → 实时列表匹配；匹配不到 → 任意路径直接注册激活
+const V2 =
+  'if(o.projects){try{u=o.projects.resolve(l)}catch(z){let E=(await Dt(o,i).listWorkspaces()).filter(P=>P.id===l||P.path===l||P.title===l);if(!E.length){let x={id:l,path:l,title:l.split("/").pop()};u=o.projects.registerWorkspace(x,Dt(o,i).id)}else{if(E.length>1)throw new Error(`workspace reference is ambiguous; use workspace id or full path: ${l}`);u=E[0];o.projects.registerWorkspace(u,Dt(o,i).id)}}}else{let E=(await Dt(o,i).listWorkspaces()).filter(P=>P.id===l||P.path===l||P.title===l);if(!E.length)throw new Error(`workspace is not registered/authorized: ${l}`);if(E.length>1)throw new Error(`workspace reference is ambiguous; use workspace id or full path: ${l}`);u=E[0]}'
+
+const V2_MARK = 'let x={id:l,path:l,title:l.split("/").pop()}'
 
 if (!existsSync(target)) {
   console.error(`✗ 目标不存在: ${target}\n请确认插件已安装（--plugin 可指定路径）`)
@@ -51,27 +53,31 @@ if (!existsSync(target)) {
 }
 const src = readFileSync(target, 'utf8')
 
-if (src.includes(IDEMPOTENT_MARK)) {
-  console.log('✓ workspace-refresh 已应用（跳过）')
+if (src.includes(V2_MARK)) {
+  console.log('✓ workspace-refresh v2（全开放）已应用（跳过）')
   process.exit(0)
 }
-if (!src.includes(OLD)) {
-  console.error('✗ 未找到原实现片段，插件版本可能已变化（无法自动打补丁）')
+let next = src
+if (src.includes(V1)) {
+  next = src.replace(V1, V2)
+} else if (src.includes(ORIGINAL)) {
+  next = src.replace(ORIGINAL, V2)
+} else {
+  console.error('✗ 未找到 v1/原版实现片段，插件版本可能已变化（无法自动打补丁）')
   process.exit(1)
 }
 
 const ts = new Date().toISOString().replace(/[:.]/g, '-')
 const bak = `${target}.bak-workspacerefresh-${ts}`
 copyFileSync(target, bak)
-writeFileSync(target, src.replace(OLD, NEW))
+writeFileSync(target, next)
 
 try {
   execFileSync(process.execPath, ['--check', target], { stdio: 'pipe' })
 } catch (err) {
-  // 语法校验失败 → 回滚
   copyFileSync(bak, target)
   console.error('✗ 补丁后语法校验失败，已回滚：', String(err.stderr ?? err).slice(0, 300))
   process.exit(1)
 }
-console.log(`✓ workspace-refresh 已应用（备份: ${bak}）`)
-console.log('  重启 DSH web 后生效；新增/删除工作区不再需要重启，code_use_workspace 实时可用。')
+console.log(`✓ workspace-refresh v2（全开放）已应用（备份: ${bak}）`)
+console.log('  code_use_workspace 现接受任意绝对路径（用户授权全开放），重启 DSH web 后生效。')
