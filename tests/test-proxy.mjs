@@ -38,7 +38,8 @@ function startMockDaemon(opts = {}) {
       }
       const call = JSON.parse(body)
       if (call.method === 'initialize') {
-        res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': 'mock-session-1' })
+        opts.initCount = (opts.initCount ?? 0) + 1
+        res.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': 'mock-session-' + (opts.initCount ?? 1) })
         res.end(JSON.stringify({ jsonrpc: '2.0', id: call.id, result: { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'mock-daemon', version: '0.1.1' } } }))
         return
       }
@@ -53,6 +54,13 @@ function startMockDaemon(opts = {}) {
         return
       }
       if (call.method === 'tools/call') {
+        const sid = req.headers['mcp-session-id']
+        if (opts.staleOnce && sid) {
+          opts.staleOnce = false
+          res.writeHead(404, { 'content-type': 'application/json' })
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: call.id, error: { code: -32000, message: 'unknown MCP session' } }))
+          return
+        }
         const { name, arguments: args } = call.params ?? {}
         calls.push(name)
         if (name === 'sessions_get') {
@@ -76,7 +84,7 @@ function startMockDaemon(opts = {}) {
     })
   })
   return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({ server, calls, port: server.address().port, close: () => server.close() }))
+    server.listen(0, '127.0.0.1', () => resolve({ server, calls, port: server.address().port, opts, close: () => server.close() }))
   })
 }
 
@@ -103,7 +111,7 @@ function startMockHostApi(opts = {}) {
     })
   })
   return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({ server, calls, port: server.address().port, close: () => server.close() }))
+    server.listen(0, '127.0.0.1', () => resolve({ server, calls, port: server.address().port, opts, close: () => server.close() }))
   })
 }
 
@@ -266,5 +274,22 @@ test('MCP proxy：daemon 不可达 → 结构化错误响应（不崩 server）�
     assert.ok(String(payload.error ?? '').includes('unreachable') || String(payload.error ?? '').includes('failed'), `应返回错误：${JSON.stringify(payload)}`)
   } finally {
     p.close(); host.close()
+  }
+})
+
+test('MCP proxy：daemon 重启（session 失效 404）→ 自动重握手并重试成功', async () => {
+  const daemon = await startMockDaemon({ staleOnce: true })
+  const host = await startMockHostApi()
+  const p = await startProxy({ daemonUrl: `http://127.0.0.1:${daemon.port}/mcp`, hostApiUrl: `http://127.0.0.1:${host.port}` })
+  try {
+    await p.rpc({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
+    const res = await p.rpc({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'sessions_get', arguments: { session_id: 's-x' } } })
+    assert.equal(res.json.result.isError, undefined)
+    const text = res.json.result.content[0].text
+    assert.ok(text.includes('s-x'), '重试后应返回会话数据')
+    assert.ok(daemon.calls.includes('sessions_get'), '重试的 tools/call 应到达 daemon')
+    assert.ok(daemon.opts.initCount >= 2, `应重新握手（initialize ${daemon.opts.initCount} 次）`)
+  } finally {
+    p.close(); host.close(); daemon.close()
   }
 })

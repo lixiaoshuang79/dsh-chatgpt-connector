@@ -57,7 +57,11 @@ export class DaemonClient {
     } finally {
       clearTimeout(timer)
     }
-    if (!res.ok) throw new Error(`daemon mcp http ${res.status}`)
+    if (!res.ok) {
+      const err = new Error(`daemon mcp http ${res.status}`)
+      err.status = res.status
+      throw err
+    }
     const sid = res.headers.get('mcp-session-id')
     if (sid) this.sessionId = sid
     const json = await res.json()
@@ -91,10 +95,29 @@ export class DaemonClient {
     return this.serverInfo ?? {}
   }
 
+  /**
+   * 带自动重握手的调用：daemon 重启后旧 mcp-session-id 失效（404 unknown
+   * MCP session），此时重置会话、重新 initialize 并重试一次——web 重启后
+   * mcp-proxy 无需人工恢复。
+   */
+  async postResilient(body, retried = false) {
+    try {
+      return await this.post(body)
+    } catch (err) {
+      if (!retried && err instanceof Error && err.status === 404) {
+        this.log('daemon mcp 404（session 失效，可能 daemon 已重启）— 重新握手并重试')
+        this.sessionId = undefined
+        await this.connect()
+        return await this.postResilient(body, true)
+      }
+      throw err
+    }
+  }
+
   /** 调用一个 MCP 工具；返回 { structuredContent?, content? }。 */
   async callTool(name, args) {
     await this.connect()
-    const res = await this.post({
+    const res = await this.postResilient({
       jsonrpc: '2.0',
       id: this.nextId++,
       method: 'tools/call',
@@ -112,7 +135,7 @@ export class DaemonClient {
   /** tools/list 动态发现工具面。 */
   async listTools() {
     await this.connect()
-    const res = await this.post({ jsonrpc: '2.0', id: this.nextId++, method: 'tools/list', params: {} })
+    const res = await this.postResilient({ jsonrpc: '2.0', id: this.nextId++, method: 'tools/list', params: {} })
     return res.body.result?.tools ?? []
   }
 }
